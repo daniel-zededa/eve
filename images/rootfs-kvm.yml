@@ -1,0 +1,97 @@
+kernel:
+  image: lfedge/eve-kernel:1d04837487fdf184ceec01b1abe143d93909bb64-amd64
+  cmdline: rootdelay=3
+init:
+  - linuxkit/init:144c9cee8aed9e30a16940f2bf1d3813883aceda
+  - linuxkit/runc:d971bd4ffcfc92fec49d1b46757a2a1bb98d1a65
+  - linuxkit/containerd:d445de33c7f08470187b068d247b1c0dea240f0a
+  - linuxkit/getty:06f34bce0facea79161566d67345c3ea49965437
+  - linuxkit/memlogd:9a1bb29abca6d739f4b22c3e637faf1898e14184
+  - lfedge/eve-dom0-ztools:298a14fa0d8f5185c6bf5d1580ad1633b9f3142b-amd64
+  - lfedge/eve-grub:97445e4ada3089a0d393c4d441d96c4fbd4bedd8-amd64
+  - lfedge/eve-fw:55a42ab8ad9e8a3559c2a0e2691b2c9f184e2eb5-amd64
+  - lfedge/eve-xen:3684d67cdc13168521321bb770dd18252d0c754d-amd64
+  - lfedge/eve-gpt-tools:51ecda7bc185c655c1d0423228dc83e29d4c674d-amd64
+  - lfedge/eve-kexec:71fb059192bb05733d88b58a3ff367c55ac124ec-amd64
+onboot:
+  - name: rngd
+    image: lfedge/eve-rngd:f2e7210bfa4f2474811b2b20f1ebb73d8afcc1b3-amd64
+    command:
+      - /sbin/rngd
+      - '-1'
+  - name: sysctl
+    image: linuxkit/sysctl:a88a50c104d538b58da5e1441f6f0b4b738f76a6
+    binds:
+      - /etc/sysctl.d:/etc/sysctl.d
+    capabilities:
+      - CAP_SYS_ADMIN
+      - CAP_NET_ADMIN
+  - name: modprobe
+    image: linuxkit/modprobe:v0.5
+    command:
+      - /bin/sh
+      - -c
+      - 'modprobe -a nct6775 w83627hf_wdt hpwdt wlcore_sdio wl18xx br_netfilter dwc3
+        rk808 rk808-regulator smsc75xx cp210x nicvf tpm_tis_spi rtc_rx8010 os-em32x
+        regmap-i2c gpio_pca953x leds_gpio leds_siemens_ipc127 upboard-fpga pinctrl-upboard
+        leds-upboard xhci_tegra 2>/dev/null || :'
+  - name: storage-init
+    image: lfedge/eve-storage-init:cbb8ee91ad2b1d7507073c5a308114e566ce155d-amd64
+  - name: kdump
+    image: lfedge/eve-kdump:b765de59e4c802070a151695968240519f9673b1-amd64
+  - name: pillar-onboot
+    image: lfedge/eve-pillar:a7c18f813ef554def47843d1dc58c89e2cabfdd9-amd64
+    command:
+      - /opt/zededa/bin/onboot.sh
+  - name: apparmor
+    image: lfedge/eve-apparmor:796c7ff17729a217dd7cb527e8a3e7665ffa0edb-amd64
+  - name: measure-config
+    image: lfedge/eve-measure-config:a5b548f1898a08b50b5e018f4efae306cca5ba53-amd64
+services:
+  - name: newlogd
+    image: lfedge/eve-newlog:3acda62d229f5b5e249be701bf2ef19eae7a62f7-amd64
+    cgroupsPath: /eve/services/newlogd
+    oomScoreAdj: -999
+  - name: edgeview
+    image: lfedge/eve-edgeview:246b217e797901c121dced1c2411acfacfa95bf3-amd64
+    cgroupsPath: /eve/services/eve-edgeview
+    oomScoreAdj: -800
+  - name: debug
+    image: lfedge/eve-debug:7acf2e6f7a7b5ba0a6a9d20a48a871364b8962ac-amd64
+    cgroupsPath: /eve/services/debug
+    oomScoreAdj: -999
+  - name: wwan
+    image: lfedge/eve-wwan:99a00edb55ffe8e9e3736a4f706325d1aaeb5177-amd64
+    cgroupsPath: /eve/services/wwan
+    oomScoreAdj: -999
+  - name: wlan
+    image: lfedge/eve-wlan:7bf0df30c579a07f6c3d714bb6684b5a371f2753-amd64
+    cgroupsPath: /eve/services/wlan
+    oomScoreAdj: -999
+  - name: guacd
+    image: lfedge/eve-guacd:c95b90e208cf26786c3282ca248244b7f72d8d93-amd64
+    cgroupsPath: /eve/services/guacd
+    oomScoreAdj: -999
+  - name: pillar
+    image: lfedge/eve-pillar:a7c18f813ef554def47843d1dc58c89e2cabfdd9-amd64
+    cgroupsPath: /eve/services/pillar
+    oomScoreAdj: -999
+  - name: vtpm
+    image: lfedge/eve-vtpm:6a879fd2d962dca72d275ce3d8999050ed8742dd-amd64
+    cgroupsPath: /eve/services/vtpm
+    oomScoreAdj: -999
+  - name: watchdog
+    image: lfedge/eve-watchdog:112774134b1d7d7131460d98768a78ce331fbff0-amd64
+    cgroupsPath: /eve/services/watchdog
+    oomScoreAdj: -1000
+  - name: xen-tools
+    image: lfedge/eve-xen-tools:aab6db31650900116c34fe89b484ef9a277d3f8f-amd64
+    cgroupsPath: /eve/services/xen-tools
+    oomScoreAdj: -999
+files:
+  - path: /etc/eve-release
+    source: eve_version
+  - path: etc/linuxkit-eve-config.yml
+    metadata: yaml
+  - path: /etc/eve-hv-type
+    contents: kvm
