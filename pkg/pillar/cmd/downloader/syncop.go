@@ -411,11 +411,17 @@ func constructDatastoreContext(ctx *downloaderContext, configName string, NameIs
 			}
 		}
 
-		// Reattach the raw query string after the path has been assembled.
-		// We do not re-encode it: the caller is responsible for passing a
-		// correctly percent-encoded query string in configName.
+		// Reattach the query string after the path has been assembled,
+		// normalizing it so that any reserved characters the controller
+		// left raw are percent-encoded. Azure SAS tokens carry ':' inside
+		// their st=/se= timestamps (e.g. se=2026-12-06T03:27:02Z); when
+		// that ':' reaches Azure unencoded the request is rejected with
+		// HTTP 409. url.JoinPath only operates on the path, so the query
+		// must be normalized separately. The normalization is idempotent:
+		// a value already correctly percent-encoded round-trips to itself,
+		// so a well-formed query string is left unchanged.
 		if len(configQuery) > 0 {
-			downloadURL += configQuery
+			downloadURL += "?" + reencodeQuery(configQuery[1:]) // drop leading '?'
 		}
 	}
 
@@ -434,6 +440,44 @@ func constructDatastoreContext(ctx *downloaderContext, configName string, NameIs
 		Region:          dst.Region,
 	}
 	return &dsCtx, nil
+}
+
+// reencodeQuery normalizes a raw query string by percent-encoding any
+// reserved characters that may have been left unencoded in a datastore's
+// relative URL (most notably ':' inside Azure SAS st=/se= timestamps).
+//
+// Unlike url.Values.Encode it preserves the original parameter order, and
+// it is idempotent: a key or value that is already correctly percent-encoded
+// round-trips to itself, so applying it to a well-formed query is a no-op
+// and applying it twice yields the same result.
+func reencodeQuery(rawQuery string) string {
+	if rawQuery == "" {
+		return ""
+	}
+	var b strings.Builder
+	for i, pair := range strings.Split(rawQuery, "&") {
+		if i > 0 {
+			b.WriteByte('&')
+		}
+		key, value, hasValue := strings.Cut(pair, "=")
+		b.WriteString(reencodeComponent(key))
+		if hasValue {
+			b.WriteByte('=')
+			b.WriteString(reencodeComponent(value))
+		}
+	}
+	return b.String()
+}
+
+// reencodeComponent idempotently percent-encodes a single query key or
+// value: it first decodes any existing percent-escapes, then re-encodes,
+// so raw and already-encoded inputs converge to the same output. If the
+// input cannot be unescaped (malformed %xx), it is encoded as-is.
+func reencodeComponent(s string) string {
+	if decoded, err := url.QueryUnescape(s); err == nil {
+		s = decoded
+	}
+	return url.QueryEscape(s)
 }
 
 func getDatastoreCredential(ctx *downloaderContext,
