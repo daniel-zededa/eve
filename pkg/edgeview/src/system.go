@@ -1152,8 +1152,9 @@ func createArchive(source, archiveName string, timeRange *logSearchRange, dirSiz
 			}
 
 			if info.IsDir() {
-				// skip if it is part of the blocked directories
-				if !checkBlockedDirs(filepath.Join(path, info.Name())) {
+				// skip if it is part of the blocked directories; 'path' is
+				// already the full path of the walked entry
+				if !checkBlockedDirs(path) {
 					return filepath.SkipDir
 				}
 				return nil
@@ -1234,11 +1235,82 @@ func createArchive(source, archiveName string, timeRange *logSearchRange, dirSiz
 	return nil
 }
 
-// checkBlockedDirs - return false if the dirName is in blocked list
+// checkBlockedDirs - return false if the dirName resolves into the blocked list.
+//
+// The path comes verbatim from the client, so a plain string prefix match is
+// not enough: '/persist//vault' and '/persist/./vault' name a blocked file
+// without sharing its prefix, and the container's read-only host mounts expose
+// the same file under a second name ('/hostfs/persist/vault', or
+// '/proc/<pid>/root/persist/vault' since the container runs with pid=host).
+// Every candidate name is normalized and then matched a path segment at a
+// time, so that an unrelated '/persist/vaulted' stays readable.
 func checkBlockedDirs(dirName string) bool {
-	for _, d := range tarBlockDirs {
-		d1 := strings.TrimPrefix(d, "/") // handle without leading '/' in front
-		if strings.HasPrefix(dirName, d) || strings.HasPrefix(dirName, d1) {
+	for _, segs := range blockedPathCandidates(dirName) {
+		for _, d := range tarBlockDirs {
+			if hasSegmentPrefix(segs, strings.Split(strings.Trim(d, "/"), "/")) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// blockedPathCandidates - every host-absolute name the path may refer to, each
+// split into segments. More than one is returned when the path is relative or
+// reaches its target through a symlink; matching any of them blocks the path.
+func blockedPathCandidates(dirName string) [][]string {
+	names := []string{dirName}
+	if resolved, err := filepath.EvalSymlinks(dirName); err == nil && resolved != dirName {
+		names = append(names, resolved)
+	}
+	if !filepath.IsAbs(dirName) {
+		// a relative path was blocked as if rooted at '/' before; keep that
+		// in addition to resolving it against the working directory
+		names = append(names, "/"+dirName)
+	}
+
+	candidates := make([][]string, 0, len(names))
+	for _, name := range names {
+		candidates = append(candidates, stripHostRootView(pathSegments(name)))
+	}
+	return candidates
+}
+
+// pathSegments - clean the path, make it absolute, and split it on '/'
+func pathSegments(name string) []string {
+	if !filepath.IsAbs(name) {
+		if abs, err := filepath.Abs(name); err == nil {
+			name = abs
+		}
+	}
+	return strings.Split(strings.Trim(filepath.Clean(name), "/"), "/")
+}
+
+// stripHostRootView - drop the leading mount points under which the container
+// sees the host's root filesystem, so a blocked directory reached through one
+// of them matches the same entry as its plain name
+func stripHostRootView(segs []string) []string {
+	for {
+		switch {
+		case len(segs) > 1 && segs[0] == "hostfs": // the '/:/hostfs:ro' bind
+			segs = segs[1:]
+		case len(segs) > 3 && segs[0] == "proc" && segs[2] == "root":
+			segs = segs[3:] // '/proc/<pid>/root', the container has pid=host
+		case len(segs) > 4 && segs[0] == "host" && segs[1] == "proc" && segs[3] == "root":
+			segs = segs[4:] // the same, through the '/proc:/host/proc:ro' bind
+		default:
+			return segs
+		}
+	}
+}
+
+// hasSegmentPrefix - report whether segs starts with every segment of prefix
+func hasSegmentPrefix(segs, prefix []string) bool {
+	if len(segs) < len(prefix) {
+		return false
+	}
+	for i, p := range prefix {
+		if segs[i] != p {
 			return false
 		}
 	}
