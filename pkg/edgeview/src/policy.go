@@ -5,12 +5,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/lf-edge/eve/pkg/pillar/types"
 )
@@ -97,6 +99,8 @@ func getAllLocalAddr() []string {
 	localIPs = getLocalIPs()
 	localIPs = append(localIPs, "0.0.0.0")
 	localIPs = append(localIPs, "127.0.0.1")
+	localIPs = append(localIPs, "::")
+	localIPs = append(localIPs, "::1")
 	localIPs = append(localIPs, "localhost")
 	return localIPs
 }
@@ -315,7 +319,11 @@ func getCNIPrefix() (*net.IPNet, error) {
 }
 
 func checkAddrLocal(addr string) bool {
-	for _, a := range devIntfIPs {
+	return addrInList(devIntfIPs, addr)
+}
+
+func addrInList(addrs []string, addr string) bool {
+	for _, a := range addrs {
 		if a == addr {
 			return true
 		}
@@ -362,32 +370,55 @@ func checkAddrApps(addr string) (bool, bool, string) {
 	return false, false, ""
 }
 
-func checkAndLogProxySession(host string) (bool, string) {
-	hostIP := host
-	if strings.Contains(host, ":") {
-		items := strings.SplitN(host, ":", 2)
-		if len(items) == 2 {
-			hostIP = items[0]
-		}
-	}
+// proxyDest - which policy governs a 'tcp/proxy' destination. The values are
+// ordered so that the larger one wins when a destination could be classified
+// more than one way, matching the order checkIPportPolicy tests them in.
+type proxyDest int
 
-	content := host
-	isAddrApps, vncEnable, appName := checkAddrApps(hostIP)
-	if isAddrApps {
+const (
+	proxyDestExt proxyDest = iota
+	proxyDestApp
+	proxyDestDevice
+	proxyDestAppConsole
+)
+
+// proxyResolveTimeout bounds the name lookup done for a proxy destination.
+const proxyResolveTimeout = 2 * time.Second
+
+// checkAndLogProxySession - policy check for one destination of a 'tcp/proxy'
+// session. A proxy session defers its decision to connect time, so this has to
+// reach the same verdict checkIPportPolicy reaches for a plain
+// 'tcp/<addr>:<port>' session. In particular a destination on the device
+// itself is governed by the device policy; treating everything that is not an
+// app address as external would let a proxy session reach device services with
+// only the external policy enabled.
+func checkAndLogProxySession(host string) (bool, string) {
+	hostIP, hostPort := splitProxyHostPort(host)
+
+	var kind, appName string
+	switch dest, vncEnable, name := classifyProxyDest(hostIP, hostPort); dest {
+	case proxyDestAppConsole, proxyDestApp:
 		if !appPolicy.Enabled {
 			return false, appPolicyErr
 		} else if !vncEnable {
 			return false, vncPolicyErr
 		}
-		content = content + "(app)"
+		kind, appName = "(app)", name
 		evStatus.CmdCountApp++
-	} else {
+	case proxyDestDevice:
+		if !devPolicy.Enabled {
+			return false, devPolicyErr
+		}
+		kind = "(dev)"
+		evStatus.CmdCountDev++
+	default:
 		if !extPolicy.Enabled {
 			return false, extPolicyErr
 		}
-		content = content + "(ext)"
+		kind = "(ext)"
 		evStatus.CmdCountExt++
 	}
+	content := host + kind
 
 	var instStr string
 	if edgeviewInstID > 0 {
@@ -403,4 +434,66 @@ func checkAndLogProxySession(host string) (bool, string) {
 	logObj.Noticef("recv%s: proxy connection to %s %s", instStr, content, appName)
 
 	return true, ""
+}
+
+// classifyProxyDest - decide which policy governs a proxy destination. The
+// literal host is classified and, when it is a name, so is every address it
+// resolves to; the most restrictive result wins, so a name cannot be used to
+// reach a device or app address as if it were external.
+func classifyProxyDest(hostIP, hostPort string) (proxyDest, bool, string) {
+	dest := proxyDestExt
+	var vncEnable bool
+	var appName string
+
+	for _, addr := range proxyDestAddrs(hostIP) {
+		var (
+			d      proxyDest
+			enable bool
+			name   string
+		)
+		if isConsole, allowVNC, console := checkAppConsole(addr, hostPort); isConsole {
+			d, enable, name = proxyDestAppConsole, allowVNC, console
+		} else if checkAddrLocal(addr) {
+			d = proxyDestDevice
+		} else if isApp, allowVNC, app := checkAddrApps(addr); isApp {
+			d, enable, name = proxyDestApp, allowVNC, app
+		} else {
+			d = proxyDestExt
+		}
+		if d > dest {
+			dest, vncEnable, appName = d, enable, name
+		}
+	}
+
+	return dest, vncEnable, appName
+}
+
+// proxyDestAddrs - the literal destination plus, when it is a name, the
+// addresses it resolves to. Resolution is best-effort; a name that does not
+// resolve is still classified by its literal form. Note that the proxy dials
+// through the session's own DNS server when one was given with 'proxy@<ip>',
+// which this lookup does not use.
+func proxyDestAddrs(hostIP string) []string {
+	addrs := []string{hostIP}
+	if hostIP == "" || net.ParseIP(hostIP) != nil {
+		return addrs
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), proxyResolveTimeout)
+	defer cancel()
+	resolved, err := net.DefaultResolver.LookupHost(ctx, hostIP)
+	if err != nil {
+		log.Noticef("proxyDestAddrs: can not resolve %s: %v", hostIP, err)
+		return addrs
+	}
+	return append(addrs, resolved...)
+}
+
+// splitProxyHostPort - split a CONNECT authority into host and port. The port
+// may be absent and the host may be a bracketed IPv6 literal.
+func splitProxyHostPort(host string) (string, string) {
+	if h, p, err := net.SplitHostPort(host); err == nil {
+		return h, p
+	}
+	return strings.Trim(host, "[]"), ""
 }
