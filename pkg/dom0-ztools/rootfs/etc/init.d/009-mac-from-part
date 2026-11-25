@@ -1,0 +1,162 @@
+#!/bin/sh
+# Copyright (c) 2026 Zededa, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Set a network interface's MAC address from a record in a disk partition.
+#
+# Some devices keep their per-unit MAC addresses in a partition written at the
+# factory (manufacturing data) rather than in the NIC, whose driver then falls
+# back to a random or fixed address. Device specific settings (e.g. grub-hv.cfg
+# in the ESP, written by pkg/qcom-flash) can describe such a record on the
+# kernel command line, and this script applies it before the network is set up:
+#
+#   eve_mac_from_part=<partlabel>,<magic offset>,<magic>,<MAC offset>,<format>,<interface>
+#
+#   partlabel     GPT partition name (PARTNAME) holding the record
+#   magic offset  byte offset of <magic> in the partition (decimal or 0x hex)
+#   magic         string that must be found at <magic offset>, so a missing or
+#                 erased record is never used ("-" to skip the check)
+#   MAC offset    byte offset of the MAC address in the partition
+#   format        "ascii": 17 characters, xx:xx:xx:xx:xx:xx
+#                 "bin":   6 raw bytes
+#   interface     an interface name (e.g. eth1), or driver:<driver>[:<suffix>]
+#                 for the interface bound to <driver> whose bus device name
+#                 (e.g. PCI address) ends with <suffix>, e.g.
+#                 driver:tc956x_pci-eth:.0 for PCI function 0, since interface
+#                 numbering depends on probe order. No wildcards: GRUB would
+#                 try to expand them.
+#
+# The parameter may be given more than once, one record per interface.
+# Example:
+#   eve_mac_from_part=mfgdata,0,MFG1,0x40,bin,eth0
+#
+# It runs before the network is configured: the address set here is the one
+# the interface comes up with. It never fails the boot: anything unexpected is
+# logged to the kernel log and the interface keeps its address.
+#
+# Usage: 009-mac-from-part [--dry-run]
+
+DRYRUN=""
+[ "$1" = "--dry-run" ] && DRYRUN=1
+
+log() {
+    echo "mac-from-part: $*" > /dev/kmsg 2>/dev/null
+    [ -n "$DRYRUN" ] && echo "mac-from-part: $*"
+}
+
+# part_dev <partlabel>: block device of the partition with that GPT name
+part_dev() {
+    for u in /sys/class/block/*/uevent; do
+        if grep -qx "PARTNAME=$1" "$u" 2>/dev/null; then
+            d=$(sed -n 's/^DEVNAME=//p' "$u")
+            [ -b "/dev/$d" ] && echo "/dev/$d" && return 0
+        fi
+    done
+    return 1
+}
+
+# read_bytes <device> <offset> <length>
+read_bytes() {
+    dd if="$1" bs=1 skip="$(($2))" count="$3" 2>/dev/null
+}
+
+# find_iface <spec>
+find_iface() {
+    case "$1" in
+        driver:*)
+            spec=${1#driver:}
+            drv=${spec%%:*}
+            sfx=""
+            [ "$spec" != "$drv" ] && sfx=${spec#*:}
+            for n in /sys/class/net/*; do
+                d=$(readlink "$n/device/driver" 2>/dev/null)
+                [ "${d##*/}" = "$drv" ] || continue
+                dev=$(readlink "$n/device" 2>/dev/null)
+                case "${dev##*/}" in
+                    *"$sfx") echo "${n##*/}"; return 0 ;;
+                esac
+            done
+            return 1
+            ;;
+        *)
+            [ -e "/sys/class/net/$1" ] && echo "$1"
+            ;;
+    esac
+}
+
+apply_record() {
+    rec="$1"
+    old_ifs=$IFS
+    IFS=,
+    # shellcheck disable=SC2086
+    set -- $rec
+    IFS=$old_ifs
+    if [ $# -ne 6 ]; then
+        log "ignoring malformed eve_mac_from_part=$rec"
+        return
+    fi
+    label=$1 magic_off=$2 magic=$3 mac_off=$4 format=$5 ifspec=$6
+
+    dev=$(part_dev "$label") || { log "no partition named $label"; return; }
+
+    if [ "$magic" != "-" ]; then
+        found=$(read_bytes "$dev" "$magic_off" "${#magic}")
+        if [ "$found" != "$magic" ]; then
+            log "$dev ($label): no $magic record at $magic_off, leaving the MAC alone"
+            return
+        fi
+    fi
+
+    case "$format" in
+        ascii)
+            mac=$(read_bytes "$dev" "$mac_off" 17 | tr 'A-F' 'a-f')
+            ;;
+        bin)
+            mac=$(read_bytes "$dev" "$mac_off" 6 | od -An -tx1 | tr -s ' \n' ' ' | \
+                sed 's/^ //; s/ $//; s/ /:/g')
+            ;;
+        *)
+            log "unknown format $format in eve_mac_from_part=$rec"
+            return
+            ;;
+    esac
+
+    if ! echo "$mac" | grep -Eqx '[0-9a-f]{2}(:[0-9a-f]{2}){5}'; then
+        log "$dev ($label): malformed MAC '$mac', leaving the MAC alone"
+        return
+    fi
+    first=$((0x${mac%%:*}))
+    if [ "$mac" = "00:00:00:00:00:00" ] || [ "$mac" = "ff:ff:ff:ff:ff:ff" ] || \
+       [ $((first & 1)) -ne 0 ]; then
+        log "$dev ($label): unusable MAC $mac, leaving the MAC alone"
+        return
+    fi
+
+    iface=$(find_iface "$ifspec")
+    if [ -z "$iface" ]; then
+        log "$dev ($label) has $mac, but no interface matches $ifspec"
+        return
+    fi
+
+    current=$(cat "/sys/class/net/$iface/address")
+    if [ "$current" = "$mac" ]; then
+        log "$iface already has $mac"
+        return
+    fi
+    if [ -n "$DRYRUN" ]; then
+        log "dry run: would set $iface $current -> $mac (from $label)"
+        return
+    fi
+    if ip link set dev "$iface" address "$mac"; then
+        log "$iface: $current -> $mac (from $label)"
+    else
+        log "failed to set $iface to $mac, leaving $current"
+    fi
+}
+
+for arg in $(cat /proc/cmdline); do
+    case "$arg" in
+        eve_mac_from_part=*) apply_record "${arg#eve_mac_from_part=}" ;;
+    esac
+done
+exit 0
