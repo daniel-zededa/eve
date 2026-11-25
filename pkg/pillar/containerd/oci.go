@@ -24,6 +24,7 @@ import (
 	zconfig "github.com/lf-edge/eve-api/go/config"
 	"github.com/lf-edge/eve/pkg/pillar/types"
 	"github.com/lf-edge/eve/pkg/pillar/utils/cgroup"
+	"github.com/lf-edge/eve/pkg/pillar/utils/devwait"
 	"github.com/linuxkit/linuxkit/src/cmd/linuxkit/moby"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -376,8 +377,20 @@ func (s *ociSpec) UpdateWithIoBundles(config *types.DomainConfig, aa *types.Assi
 				devList = append(devList, ib.Serial)
 			}
 
-			// Generic devices
+			// Generic devices. Some appear late in boot (e.g. a GPIO
+			// chip built by dom0-ztools 008-gpio-expose once its pin
+			// controller probes): wait for the device rather than start
+			// the application without it, and fail the start if it never
+			// comes, so domainmgr reports it and retries.
 			if ib.Type == types.IoOther && ib.Ifname != "" {
+				err := devwait.ForCharDevice(ib.Ifname, devwait.DefaultTimeout,
+					func(format string, args ...interface{}) {
+						logrus.Infof("I/O adapter %s: "+format,
+							append([]interface{}{ib.Logicallabel}, args...)...)
+					})
+				if err != nil {
+					return fmt.Errorf("I/O adapter %s: %w", ib.Logicallabel, err)
+				}
 				logrus.Infof("Adding generic device %s\n", ib.Ifname)
 				devList = append(devList, ib.Ifname)
 			}

@@ -256,6 +256,12 @@ func PciLongToIfname(log *base.LogObject, long string) (bool, string) {
 // This can handle aliases like Ifname.
 func IoBundleToPci(log *base.LogObject, ib *IoBundle) (string, error) { //nolint:gocyclo
 	var long string
+	// For an "other" adapter without a PCI address, Ifname is the path of
+	// a device node (e.g. /dev/video0, /dev/gpio/dio) for containers, not a
+	// network interface: there is no PCI device to look up.
+	if ib.Type == IoOther && ib.PciLong == "" {
+		return "", nil
+	}
 	if ib.PciLong != "" {
 		long = ib.PciLong
 		// Check if model matches
