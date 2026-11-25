@@ -211,7 +211,8 @@ BOOT_PART=$(INSTALLER)/boot
 BSP_IMX_PART=$(INSTALLER)/bsp-imx
 
 # QDL flash bundle for Qualcomm devices booting from UFS (see pkg/qcom-flash/README.md)
-# QCOM_BOARD: board in pkg/qcom-flash/boards, e.g. iq-9075-evk (IQ9) or iq-8275-evk (IQ8)
+# QCOM_BOARD: board in pkg/qcom-flash/boards, e.g. iq-9075-evk (IQ9), iq-8275-evk (IQ8)
+#             or qcs6490-rb3gen2 (RB3 Gen 2)
 # QCOM_BOARD_DIR: board directory (board.conf, grub.cfg, flash/, partitions/, ...),
 #                 default pkg/qcom-flash/boards/$(QCOM_BOARD); for custom boards, also
 #                 outside of EVE's tree. QCOM_BOARD then defaults to its directory name

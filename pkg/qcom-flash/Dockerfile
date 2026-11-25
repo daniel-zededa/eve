@@ -30,8 +30,9 @@ WORKDIR /qcom-ptool
 RUN for p in /patches/*.patch; do patch -p1 < "$p"; done
 
 # Boot firmware (meta-qcom: firmware-qcom-boot-qcs8300_00142.bb,
-# firmware-qcom-boot-qcs9100_00142.bb) and CDT (firmware-qcom-cdt-qcs8300.bb,
-# firmware-qcom-cdt-qcs9100.bb)
+# firmware-qcom-boot-qcs9100_00142.bb, firmware-qcom-boot-qcs6490_00142.bb)
+# and CDT (firmware-qcom-cdt-qcs8300.bb, firmware-qcom-cdt-qcs9100.bb,
+# firmware-qcom-cdt-qcs6490.bb)
 ENV BOOTBIN_VER=00142
 ENV FW_URL=https://softwarecenter.qualcomm.com/nexus/generic/product/chip/tech-package
 ENV CDT_URL=https://artifacts.codelinaro.org/artifactory/codelinaro-le/Qualcomm_Linux
@@ -39,8 +40,11 @@ ADD ${FW_URL}/QCS8300_bootbinaries.1.0/qcs8300_bootbinaries.1.0-test-device-publ
 ADD ${FW_URL}/QCS8300_bootbinaries.1.0/qcs8300_bootbinaries.1.0-test-device-public/${BOOTBIN_VER}/QCS8300_bootbinaries_immutable_${BOOTBIN_VER}.zip /dl/
 ADD ${FW_URL}/QCS9100_bootbinaries.1.0/qcs9100_bootbinaries.1.0-test-device-public/${BOOTBIN_VER}/QCS9100_bootbinaries_${BOOTBIN_VER}.zip /dl/
 ADD ${FW_URL}/QCS9100_bootbinaries.1.0/qcs9100_bootbinaries.1.0-test-device-public/${BOOTBIN_VER}/QCS9100_bootbinaries_immutable_${BOOTBIN_VER}.zip /dl/
+ADD ${FW_URL}/QCM6490_bootbinaries.1.0/qcm6490_bootbinaries.1.0-test-device-public/${BOOTBIN_VER}/QCM6490_bootbinaries_${BOOTBIN_VER}.zip /dl/
+ADD ${FW_URL}/QCM6490_bootbinaries.1.0/qcm6490_bootbinaries.1.0-test-device-public/${BOOTBIN_VER}/QCM6490_bootbinaries_immutable_${BOOTBIN_VER}.zip /dl/
 ADD ${CDT_URL}/QCS8300/cdt/qcs8275-iq-8275-evk-pro-sku.zip /dl/cdt-iq-8275-evk.zip
 ADD ${CDT_URL}/QCS9100/cdt/rb8_core_kit.zip /dl/cdt-iq-9075-evk.zip
+ADD ${CDT_URL}/QCS6490/cdt/rb3gen2-core-kit.zip /dl/cdt-qcs6490-rb3gen2.zip
 COPY downloads.sha256 /dl/
 WORKDIR /dl
 RUN sha256sum -c downloads.sha256
@@ -51,7 +55,8 @@ COPY prepare-base.sh /
 ENV DL_DIR=/dl PTOOL_DIR=/qcom-ptool OUT_DIR=/out/qcom-flash
 WORKDIR /
 RUN /prepare-base.sh iq-8275-evk qcs8300 cdt_qcs8275_iq_8275_evk_pro_sku.bin && \
-    /prepare-base.sh iq-9075-evk qcs9100 cdt_rb8_core_kit.bin
+    /prepare-base.sh iq-9075-evk qcs9100 cdt_rb8_core_kit.bin && \
+    /prepare-base.sh qcs6490-rb3gen2 qcm6490 cdt_core_kit.bin
 
 # The GPT is generated when the bundle is made, from the board's partition
 # layout or the base's one, so ship the patched qcom-ptool. Boards are not part
@@ -76,6 +81,7 @@ RUN echo "mtools_skip_check=1" >> /out/etc/mtools.conf && \
 # included in the SBOM.
 RUN register-sbom-pkg.sh -n qcs8300-bootbinaries -v "${BOOTBIN_VER}" -l proprietary -u "${FW_URL}/QCS8300_bootbinaries.1.0" -o /out && \
     register-sbom-pkg.sh -n qcs9100-bootbinaries -v "${BOOTBIN_VER}" -l proprietary -u "${FW_URL}/QCS9100_bootbinaries.1.0" -o /out && \
+    register-sbom-pkg.sh -n qcm6490-bootbinaries -v "${BOOTBIN_VER}" -l proprietary -u "${FW_URL}/QCM6490_bootbinaries.1.0" -o /out && \
     register-sbom-pkg.sh -n qcom-cdt -v "qli-2.1" -l BSD-3-Clause -u "${CDT_URL}" -o /out && \
     register-sbom-pkg.sh -n qcom-ptool -v "${QCOM_PTOOL_REV}" -l BSD-3-Clause-Clear -u https://github.com/qualcomm-linux/qcom-ptool -o /out
 

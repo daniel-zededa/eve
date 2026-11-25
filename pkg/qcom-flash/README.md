@@ -1,12 +1,14 @@
 # qcom-flash
 
 Builds the [QDL](https://github.com/linux-msm/qdl) flash bundle for Qualcomm
-devices booting from UFS, based on Qualcomm IQ-8275 (IQ8) or IQ-9075 (IQ9):
+devices booting from UFS, based on Qualcomm IQ-8275 (IQ8), IQ-9075 (IQ9) or
+QCS6490 (RB3 Gen 2):
 
-| Board       | SoC     | `QCOM_BOARD`  |
-|-------------|---------|---------------|
-| IQ-8275 EVK | QCS8275 | `iq-8275-evk` |
-| IQ-9075 EVK | QCS9075 | `iq-9075-evk` |
+| Board          | SoC     | `QCOM_BOARD`      |
+|----------------|---------|-------------------|
+| IQ-8275 EVK    | QCS8275 | `iq-8275-evk`     |
+| IQ-9075 EVK    | QCS9075 | `iq-9075-evk`     |
+| RB3 Gen 2 Core | QCS6490 | `qcs6490-rb3gen2` |
 
 On these devices the boot chain (XBL, TrustZone, hypervisor, AOP, UEFI, ...)
 lives in dedicated UFS LUNs, and everything is programmed with QDL from EDL
@@ -40,7 +42,7 @@ A board is a directory, [boards/](boards) has the Qualcomm reference ones:
 
 | File                         |           | Description                                         |
 |------------------------------|-----------|-----------------------------------------------------|
-| `board.conf`                 | mandatory | `BASE=iq-8275-evk` or `BASE=iq-9075-evk`: Qualcomm boot firmware, CDT and UFS partition layout the board is based on |
+| `board.conf`                 | mandatory | `BASE=iq-8275-evk`, `BASE=iq-9075-evk` or `BASE=qcs6490-rb3gen2`: Qualcomm boot firmware, CDT and UFS partition layout the board is based on |
 | `grub.cfg`                   | optional  | board GRUB settings, appended to `grub-qcom.cfg`     |
 | `grub-qcom.cfg`              | optional  | replaces the common [grub-qcom.cfg](grub-qcom.cfg)   |
 | `dtb/`                       | optional  | device trees (or any file), copied to `/dtb` in the ESP |
