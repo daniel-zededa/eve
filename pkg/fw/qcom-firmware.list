@@ -1,7 +1,8 @@
 # Copyright (c) 2026 Zededa, Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Firmware for Qualcomm IQ-8275 EVK (qcs8300) and IQ-9075 EVK (qcs9100/sa8775p)
+# Firmware for Qualcomm IQ-8275 EVK (qcs8300), IQ-9075 EVK (qcs9100/sa8775p)
+# and RB3 Gen 2 (qcs6490)
 # taken from linux-firmware, i.e. the same files the Qualcomm Linux BSP
 # (QLI 2.1, meta-qcom) installs on these boards. Each block is one linux-firmware
 # package from packagegroup-iq-8275-evk-firmware / packagegroup-iq-9075-evk-firmware
@@ -93,3 +94,34 @@ qcom/sa8775p/qupv3fw.elf*
 qcom/vpu/*
 qcom/vpu-1.0/*
 qcom/vpu-2.0/*
+
+# RB3 Gen 2 (QCS6490), packagegroup-rb3gen2-firmware. qcom/qcs6490/* are
+# WHENCE links to qcom/qcm6490/ (or to ath11k/ for wpss.mbn), which is where
+# the RB3 Gen 2 device tree looks for its firmware. Patterns taken from the
+# WHENCE entries of these packages' files (not from the recipe FILES).
+# linux-firmware-qcom-adreno-a660 (above), -qcom-qcm6490-adreno (GPU)
+qcom/qcm6490/a660_zap.mbn*
+qcom/qcs6490/a660_zap.mbn*
+# linux-firmware-ath11k-wcn6750, -qcom-qcm6490-wifi (WiFi)
+ath11k/WCN6750
+qcom/qcm6490/wpss.mbn*
+qcom/qcs6490/wpss.mbn*
+# linux-firmware-qca-wcn6750 (Bluetooth)
+qca/msbtfw11.*
+qca/msnv11.*
+# linux-firmware-lt9611uxc (Lontium DSI-HDMI bridge)
+lt9611uxc_fw.bin*
+Lontium/lt9611uxc_fw.bin*
+# linux-firmware-qcom-qcm6490-audio, -compute, -qupv3fw
+qcom/qcm6490/adsp*.*
+qcom/qcm6490/battmgr.jsn*
+qcom/qcm6490/cdsp*.*
+qcom/qcm6490/qupv3fw.elf*
+qcom/qcs6490/adsp*.*
+qcom/qcs6490/battmgr.jsn*
+qcom/qcs6490/cdsp*.*
+qcom/qcs6490/qupv3fw.elf*
+qcom/qcs6490/QCS6490-RB3Gen2-tplg.bin*
+# Not installed: linux-firmware-qcom-qcs6490-modem (linux-firmware 20260910
+# has no qcom/qcs6490/modem.mbn, so remoteproc_mpss can't load) and
+# camxfirmware-kodiak (camera).
