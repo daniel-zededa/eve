@@ -1,0 +1,49 @@
+diff --git a/vhost-device-gpio/Cargo.toml b/vhost-device-gpio/Cargo.toml
+index 68569b1..6f14274 100644
+--- a/vhost-device-gpio/Cargo.toml
++++ b/vhost-device-gpio/Cargo.toml
+@@ -28,7 +28,7 @@ virtio-queue = { workspace = true }
+ vm-memory = { workspace = true }
+ vmm-sys-util = { workspace = true }
+ 
+-[target.'cfg(target_env = "gnu")'.dependencies]
++[target.'cfg(target_os = "linux")'.dependencies]
+ libgpiod = "1.0"
+ 
+ [dev-dependencies]
+diff --git a/vhost-device-gpio/src/main.rs b/vhost-device-gpio/src/main.rs
+index cb0e11f..34b24e5 100644
+--- a/vhost-device-gpio/src/main.rs
++++ b/vhost-device-gpio/src/main.rs
+@@ -5,25 +5,18 @@
+ //
+ // SPDX-License-Identifier: Apache-2.0 or BSD-3-Clause
+ 
+-#[cfg(target_env = "gnu")]
++#[cfg(target_os = "linux")]
+ mod backend;
+-#[cfg(target_env = "gnu")]
++#[cfg(target_os = "linux")]
+ mod gpio;
+-#[cfg(all(target_env = "gnu", any(test, feature = "mock_gpio")))]
++#[cfg(all(target_os = "linux", any(test, feature = "mock_gpio")))]
+ mod mock_gpio;
+-#[cfg(target_env = "gnu")]
++#[cfg(target_os = "linux")]
+ mod vhu_gpio;
+-#[cfg(target_env = "gnu")]
++#[cfg(target_os = "linux")]
+ mod virtio_gpio;
+ 
+-#[cfg(target_env = "gnu")]
++#[cfg(target_os = "linux")]
+ fn main() {
+     backend::gpio_init()
+ }
+-
+-// Rust vmm container (https://github.com/rust-vmm/rust-vmm-container) doesn't
+-// have tools to do a musl build at the moment, and adding that support is
+-// tricky as well to the container. Skip musl builds until the time pre-built
+-// libgpiod library is available for musl.
+-#[cfg(target_env = "musl")]
+-fn main() {}

@@ -1,0 +1,55 @@
+#!/bin/sh
+# Copyright (c) 2026 Zededa, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Start vhost-device-gpio, the virtio-gpio back end, for a domain's host GPIO
+# chips, then exec QEMU. pillar (hypervisor/kvm_gpio.go) puts it in front of
+# the QEMU command of a domain with GPIO chips:
+#
+#   eve-vhost-gpio <socket prefix> <N0>[:<N1>...] -- <qemu command...>
+#
+# vhost-device-gpio serves /dev/gpiochip<Ni> on the socket <socket prefix><i>,
+# where QEMU's vhost-user-gpio-pci devices connect. It runs in the domain's
+# container, so it goes away with the domain. Its log is <socket prefix>.log.
+
+prefix="$1"
+chips="$2"
+if [ -z "$prefix" ] || [ -z "$chips" ] || [ "$3" != "--" ]; then
+    echo "usage: $0 <socket prefix> <N0>[:<N1>...] -- <qemu command...>" >&2
+    exit 1
+fi
+shift 3
+
+count=$(echo "$chips" | tr ':' '\n' | wc -l)
+i=0
+while [ "$i" -lt "$count" ]; do
+    rm -f "$prefix$i"
+    i=$((i + 1))
+done
+
+vhost-device-gpio --socket-path "$prefix" --socket-count "$count" \
+    --device-list "$chips" > "$prefix.log" 2>&1 &
+pid=$!
+
+# QEMU connects as a client, so the sockets must exist first. 10s each.
+i=0
+while [ "$i" -lt "$count" ]; do
+    tries=0
+    until [ -S "$prefix$i" ]; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "eve-vhost-gpio: vhost-device-gpio exited:" >&2
+            cat "$prefix.log" >&2
+            exit 1
+        fi
+        if [ "$tries" -ge 100 ]; then
+            echo "eve-vhost-gpio: no socket $prefix$i after 10s" >&2
+            kill "$pid"
+            exit 1
+        fi
+        sleep 0.1
+        tries=$((tries + 1))
+    done
+    i=$((i + 1))
+done
+
+exec "$@"

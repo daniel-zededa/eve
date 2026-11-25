@@ -28,6 +28,36 @@ ARG EVE_ALPINE_IMAGE=lfedge/eve-alpine:61283a3a978a7cdc9073a1ba678717fc3ea1fe97
 
 FROM lfedge/eve-uefi:4e60f5847d2ed202f28d3135eb9d53ec90a45ad8 AS uefi-build
 
+# vhost-device-gpio (rust-vmm), the virtio-gpio back end that gives a domain a
+# host GPIO chip (pillar hypervisor/kvm_gpio.go, eve-vhost-gpio). It needs
+# libgpiod 2 and a newer Rust than the eve-alpine mirror has, so it builds on
+# the Rust project's Alpine 3.22 image, as the target, and links Alpine 3.22's
+# libgpiod, shipped next to it. Upstream builds it for glibc only; the patch in
+# vhost-device-patches/ enables musl.
+FROM rust:1.93.1-alpine3.22 AS vhost-device-build
+ENV VHOST_DEVICE_COMMIT=a5f3d6ea24f5051c756e83b33f58f50618661765
+ENV VHOST_DEVICE_SHA256=0a61468950c031b2bd316a80b99aed0558b22b6d21b1d2a563dfdfc4ec96b510
+# hadolint ignore=DL3018
+RUN apk add --no-cache clang20-libclang libgpiod-dev musl-dev patch pkgconf
+# hadolint ignore=DL3020
+ADD https://github.com/rust-vmm/vhost-device/archive/${VHOST_DEVICE_COMMIT}.tar.gz /vhost-device.tar.gz
+COPY vhost-device-patches /vhost-device-patches
+RUN echo "$VHOST_DEVICE_SHA256  /vhost-device.tar.gz" | sha256sum -c && \
+    mkdir /src && tar -C /src --strip-components=1 -xzf /vhost-device.tar.gz
+WORKDIR /src
+RUN for p in /vhost-device-patches/*.patch; do \
+        patch -p1 --fuzz=0 --forward --batch < "$p" || exit 1; \
+    done
+# Dynamic, so it can link libgpiod.so; musl and libgcc come from the image.
+ENV LIBCLANG_PATH=/usr/lib/llvm20/lib RUSTFLAGS="-C target-feature=-crt-static"
+RUN cargo build --release --locked -p vhost-device-gpio && \
+    mkdir -p /dist/usr/bin /dist/usr/lib && \
+    cp target/release/vhost-device-gpio /dist/usr/bin/ && \
+    strip /dist/usr/bin/vhost-device-gpio && \
+    cp -P /usr/lib/libgpiod.so.3* /dist/usr/lib/ && \
+    apk info -e -v libgpiod | sed -n 's/^libgpiod-//p' > /dist/libgpiod-version && \
+    test -s /dist/libgpiod-version
+
 # The base the scripts run on, and the Alpine libraries QEMU links.
 # hadolint ignore=DL3006
 FROM ${EVE_ALPINE_IMAGE} AS runtime
@@ -189,12 +219,20 @@ RUN register-sbom-pkg.sh -o /sbom -n liburing -v "${LIBURING_VERSION}" \
 FROM runtime AS image
 COPY --from=build /dist/ /out/
 COPY --from=build /sbom/lib/apk/db/installed /qemu-sbom
-RUN merge-sbom-db.sh -o /out/lib/apk/db/installed /out/lib/apk/db/installed /qemu-sbom && \
+COPY --from=vhost-device-build /dist/ /vhost-device/
+RUN register-sbom-pkg.sh -o /vhost-device-sbom -n vhost-device-gpio \
+        -v 0.1.0-gita5f3d6ea24f5 \
+        -l "Apache-2.0 OR BSD-3-Clause" -u https://github.com/rust-vmm/vhost-device && \
+    register-sbom-pkg.sh -o /vhost-device-sbom -n libgpiod -v "$(cat /vhost-device/libgpiod-version)" \
+        -l LGPL-2.1-or-later -u https://git.kernel.org/pub/scm/libs/libgpiod/libgpiod.git && \
+    rm /vhost-device/libgpiod-version && cp -a /vhost-device/. /out/ && \
+    merge-sbom-db.sh -o /out/lib/apk/db/installed /out/lib/apk/db/installed /qemu-sbom \
+        /vhost-device-sbom/lib/apk/db/installed && \
     rm -rf /out/var/run
 # Fail here, not at the first VM start, if a library QEMU needs is missing:
 # resolve it inside the image with the image's own loader, which exits
 # non-zero when anything is unresolved.
-RUN for f in /out/usr/bin/qemu-system-*; do \
+RUN for f in /out/usr/bin/qemu-system-* /out/usr/bin/vhost-device-gpio; do \
         chroot /out "/lib/ld-musl-$(uname -m).so.1" --list "${f#/out}" >/dev/null || \
             { echo "ERROR: $f does not resolve in the image"; exit 1; }; \
     done
@@ -203,6 +241,7 @@ FROM scratch
 COPY --from=image /out/ /
 COPY init.sh /
 COPY qemu-ifup /etc/
+COPY eve-vhost-gpio /usr/bin/
 
 # Adjust /var/run, /var/lib and /var/lock to be shared
 RUN mv /var /var.template && ln -s /run /var && ln -s /run /var.template/run

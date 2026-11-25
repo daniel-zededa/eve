@@ -3,6 +3,8 @@
 
 image: eve-qemu
 org: lfedge
+# vhost-device-gpio's stage installs Alpine packages and fetches crates.
+network: yes
 config:
   binds:
     - /run:/run
