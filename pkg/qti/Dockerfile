@@ -109,10 +109,13 @@ RUN find "${STAGE}" -type f \( -perm -u+x -o -name '*.so*' \) -exec ldd {} \; 2>
 # configuration base directory of fastrpc (conf.d/*.yaml map the device tree
 # model to the board's DSP_LIBRARY_PATH). They must match the DSP firmware,
 # linux-firmware 20260910 in pkg/fw. Only the IQ-8275 EVK and IQ-9075 EVK,
-# plus the reference boards their directories link to, are installed. The
-# meta-qcom patch makes the IQ-8275 EVK CDSP use the QCS8300 libraries
-# (submitted upstream as linux-msm/hexagon-dsp-binaries#117), without it
-# FastRPC can't start a CDSP user PD on that board.
+# plus the reference boards their directories link to, and the RB3 Gen 2
+# (QCS6490: qcm6490/Thundercomm/RB3gen2, ADSP.HT.5.5.c8-00256.2 and
+# CDSP.HT.2.5.c3-00134, the versions of qcom/qcm6490/{adsp,cdsp}.mbn in
+# linux-firmware 20260910) are installed. The meta-qcom patch makes the
+# IQ-8275 EVK CDSP use the QCS8300 libraries (submitted upstream as
+# linux-msm/hexagon-dsp-binaries#117), without it FastRPC can't start a CDSP
+# user PD on that board.
 # Separate stage: these are Hexagon (DSP) binaries, nothing to build, and they
 # must not go through the ldd/strip step of the build stage.
 FROM lfedge/eve-alpine:ed52996010178a476782b02ad8e148f9cff52496 AS dsp-binaries
@@ -126,13 +129,14 @@ ADD https://github.com/linux-msm/dsp-binaries.git#${DSP_BINARIES_REV} /dsp-binar
 COPY patches/dsp-binaries/ /patches/dsp-binaries/
 WORKDIR /dsp-binaries
 RUN for p in /patches/dsp-binaries/*.patch; do patch -p1 < "$p"; done && \
-    awk -v re='^(sa8775p/Qualcomm/(SA8775P-RIDE|IQ9075-EVK)|qcs8300/Qualcomm/(QCS8300-RIDE|IQ8275-EVK))(/|$)' \
+    awk -v re='^(sa8775p/Qualcomm/(SA8775P-RIDE|IQ9075-EVK)|qcs8300/Qualcomm/(QCS8300-RIDE|IQ8275-EVK)|qcm6490/Thundercomm/RB3gen2)(/|$)' \
         '($1 == "Install:" && $2 ~ re) || ($1 == "Link:" && $3 ~ re)' config.txt > /dsp-config.txt && \
     cat /dsp-config.txt && \
     ./scripts/install.sh /dsp-config.txt "${DSP_DIR}" && \
     install -d "${DSP_DIR}/conf.d" && \
-    for b in iq8275-evk iq9075-evk qcs8300-ride sa8775p-ride; do \
-        install -m 0644 "conf.d/hexagon-dsp-binaries-qualcomm-$b.yaml" "${DSP_DIR}/conf.d/" ; \
+    for b in qualcomm-iq8275-evk qualcomm-iq9075-evk qualcomm-qcs8300-ride \
+             qualcomm-sa8775p-ride thundercomm-rb3gen2; do \
+        install -m 0644 "conf.d/hexagon-dsp-binaries-$b.yaml" "${DSP_DIR}/conf.d/" ; \
     done && \
     install -m 0644 conf.d/schema.json "${DSP_DIR}/conf.d/" && \
     install -m 0644 LICENSE.qcom LICENSE.qcom-2 WHENCE "${DSP_DIR}/"
