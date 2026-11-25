@@ -42,7 +42,7 @@ A board is a directory, [boards/](boards) has the Qualcomm reference ones:
 
 | File                         |           | Description                                         |
 |------------------------------|-----------|-----------------------------------------------------|
-| `board.conf`                 | mandatory | `BASE=iq-8275-evk`, `BASE=iq-9075-evk` or `BASE=qcs6490-rb3gen2`: Qualcomm boot firmware, CDT and UFS partition layout the board is based on |
+| `board.conf`                 | mandatory | `BASE=iq-8275-evk`, `BASE=iq-9075-evk` or `BASE=qcs6490-rb3gen2`: Qualcomm boot firmware, CDT and UFS partition layout the board is based on. Optionally `LUNS="0 1 4"`: the UFS LUNs to program, see [LUNs left alone](#luns-left-alone) |
 | `grub.cfg`                   | optional  | board GRUB settings, appended to `grub-qcom.cfg`     |
 | `grub-qcom.cfg`              | optional  | replaces the common [grub-qcom.cfg](grub-qcom.cfg)   |
 | `dtb/`                       | optional  | device trees (or any file), copied to `/dtb` in the ESP |
@@ -186,11 +186,32 @@ Things to keep in mind:
 
 The bundle lists the files and their checksums in `bundle-firmware.txt`.
 
+### LUNs left alone
+
+By default the bundle programs every UFS LUN of the layout. A product may keep
+data of its own in some of them, that the base's files must not replace: e.g.
+its CDT and DDR training data in LUN 3, or the B copies of the boot firmware.
+`LUNS` in `board.conf` lists the LUNs to program; the rawprogram, patch and
+GPT files of the others are left out of the bundle, so qdl doesn't touch them:
+
+```sh
+BASE=qcs6490-rb3gen2
+# 0: EVE, 1: XBL (A), 4: boot firmware; leave LUN 2 (XBL B), 3 (CDT, DDR) and
+# 5 (modem) as the device has them
+LUNS="0 1 4"
+```
+
+LUN 0 (EVE) is mandatory. The LUNs left alone must already hold a working
+boot chain matching the programmed ones, so this is for products that keep
+their factory data, not for blank devices. Builds that leave LUNs alone are
+flagged as custom (`luns`), and `board.info` lists them (`luns_skipped`).
+
 ### Identifying custom builds
 
 The build is flagged as custom when the board's `flash/` files differ from or
 are added to the base's ones, when its partition layout differs from the
-base's one, when it has `firmware/` files, or when `QCOM_DTB_BIN` is used. The reference boards are never
+base's one, when it has `firmware/` files, when it leaves LUNs alone (`LUNS`),
+or when `QCOM_DTB_BIN` is used. The reference boards are never
 custom. This is recorded, with a board ID (the sha256 of all the files of the
 board directory, names and contents), in:
 

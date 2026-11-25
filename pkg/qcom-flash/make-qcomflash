@@ -12,6 +12,8 @@
 # Board: a directory (BOARD_DIR, default /board) with (see README.md):
 #   board.conf     BASE=<base>: Qualcomm firmware/CDT/partition layout to start
 #                  from, one of /qcom-flash/base/* (mandatory)
+#                  LUNS="<n> ...": UFS LUNs to program, default all. LUN 0
+#                  (EVE) is mandatory (optional)
 #   grub.cfg       board GRUB settings (optional)
 #   grub-qcom.cfg  replaces the common /qcom-flash/grub-qcom.cfg (optional)
 #   dtb/           device trees, copied to the ESP's /dtb (optional)
@@ -69,8 +71,10 @@ if [ -z "$BOARD" ] || [ ! -f "$BOARD_DIR/board.conf" ]; then
     [ -n "$BOARD" ] && echo "No board.conf in $BOARD_DIR (mount the board directory there)" >&2
     exit 1
 fi
-# board.conf is parsed, not sourced: only BASE=<name> is used
+# board.conf is parsed, not sourced: only BASE=<name> and LUNS="<n> ..." are
+# used
 BASE=$(sed -n 's/^[[:space:]]*BASE[[:space:]]*=[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}.*/\1/p' "$BOARD_DIR/board.conf" | tail -n 1)
+LUNS=$(sed -n 's/^[[:space:]]*LUNS[[:space:]]*=[[:space:]]*"\{0,1\}\([0-9 ]*\)"\{0,1\}[[:space:]]*\(#.*\)\{0,1\}$/\1/p' "$BOARD_DIR/board.conf" | tail -n 1)
 if [ -z "$BASE" ] || [ ! -d "$FLASH_DIR/base/$BASE" ]; then
     bail "$BOARD_DIR/board.conf: invalid BASE '$BASE', available: $(list_dirs "$FLASH_DIR/base")"
 fi
@@ -176,6 +180,35 @@ if [ -d "$BOARD_DIR/flash" ]; then
 fi
 cp "$WORK"/gpt/* "$OUT/"
 
+### LUNs to program: all of them by default. A board can leave LUNs alone,
+### e.g. a product whose LUN 3 holds its own CDT and DDR training data, which
+### the base's CDT must not replace: their rawprogram/patch/GPT files are left
+### out of the bundle, so qdl doesn't touch those LUNs.
+LUNS_SKIPPED=""
+if [ -n "$(echo "$LUNS" | tr -d ' ')" ]; then
+    case " $LUNS " in
+        *" 0 "*) ;;
+        *) bail "$BOARD_DIR/board.conf: LUNS=\"$LUNS\" must include LUN 0 (EVE)" ;;
+    esac
+    for n in $LUNS; do
+        [ -f "$OUT/rawprogram$n.xml" ] || bail "$BOARD_DIR/board.conf: LUNS=\"$LUNS\": no LUN $n in the layout"
+    done
+    for f in "$OUT"/rawprogram[0-9].xml; do
+        n=${f##*/rawprogram}
+        n=${n%.xml}
+        case " $LUNS " in
+            *" $n "*) continue ;;
+        esac
+        rm -f "$OUT/rawprogram$n.xml" "$OUT/patch$n.xml" "$OUT/gpt_main$n.bin" \
+              "$OUT/gpt_backup$n.bin" "$OUT/gpt_both$n.bin"
+        LUNS_SKIPPED="$LUNS_SKIPPED $n"
+    done
+    if [ -n "$LUNS_SKIPPED" ]; then
+        echo "make-qcomflash: LUNs left alone (not programmed):$LUNS_SKIPPED"
+        CUSTOM_REASONS="$CUSTOM_REASONS luns"
+    fi
+fi
+
 ### dtb_a/dtb_b: firmware device tree (multi-DTB FIT), optional
 DTB_SRC=none
 if [ -f "$DTB_BIN" ]; then
@@ -231,6 +264,7 @@ EVE_VERSION=""
     echo "custom=$CUSTOM"
     echo "custom_reasons=${CUSTOM_REASONS# }"
     echo "layout=$LAYOUT_SRC"
+    echo "luns_skipped=${LUNS_SKIPPED# }"
     echo "flash_replaced=${REPLACED# }"
     echo "flash_added=${ADDED# }"
     echo "dtb=$DTB_SRC"
