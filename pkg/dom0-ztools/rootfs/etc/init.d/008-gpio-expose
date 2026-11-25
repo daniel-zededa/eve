@@ -1,0 +1,156 @@
+#!/bin/sh
+# Copyright (c) 2026 Zededa, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Expose a chosen set of GPIO lines as a GPIO chip of its own.
+#
+# Boards with user-facing digital I/O (e.g. a DIO terminal block) wire it to
+# SoC GPIO lines that share their controller with system pins (resets,
+# regulator enables, ...). Handing that controller to an application would
+# expose those too. Instead, the device settings (e.g. grub-hv.cfg in the ESP,
+# written by pkg/qcom-flash) list the lines to expose on the kernel command
+# line, and this script builds a GPIO aggregator (CONFIG_GPIO_AGGREGATOR) from
+# them: a new /dev/gpiochipN holding only those lines, under the given names.
+#
+#   eve_gpio_expose=<name>,<chip label>,<offset>=<line name>[,<offset>=<line name>...]
+#
+#   name        name of the new chip; it is also reachable as /dev/gpio/<name>
+#   chip label  label of the GPIO chip the lines are on, as gpiodetect or
+#               /sys/class/gpio/gpiochip*/label show it (e.g. 33c0000.pinctrl)
+#   offset      line offset in that chip
+#   line name   name of the line in the new chip (e.g. DO1)
+#
+# The parameter may be given more than once, one chip each. Example, the 8
+# digital I/O channels of an OnLogic FR101:
+#   eve_gpio_expose=dio,33c0000.pinctrl,0=DO1,1=DO2,2=DO3,3=DO4,4=DI1,5=DI2,6=DI3,7=DI4
+#
+# The aggregator holds its lines, so nothing else on the host can request them.
+# The chip can then be given to an application as an I/O adapter of type
+# "other" with the path /dev/gpio/<name>.
+#
+# The source chip may probe late (on the FR101 the LPASS LPI pin controller
+# comes up ~30 s into boot, after the audio DSP), so each chip is set up in
+# the background and retried until the source chip appears, backing off to
+# one attempt every 10 s, with a log line after a minute and then every ten
+# minutes. Consumers don't depend on the timing: pillar waits for an assigned
+# device when it starts the application. Without the parameter the script
+# does nothing; it never fails the boot.
+#
+# Usage: 008-gpio-expose [--dry-run]
+
+CONFIGFS=/sys/kernel/config
+AGG="$CONFIGFS/gpio-aggregator"
+DEVDIR=/dev/gpio
+
+DRYRUN=""
+[ "$1" = "--dry-run" ] && DRYRUN=1
+
+log() {
+    echo "gpio-expose: $*" > /dev/kmsg 2>/dev/null
+    [ -n "$DRYRUN" ] && echo "gpio-expose: $*"
+}
+
+# expose <spec>: set up one aggregator, run in the background
+expose() {
+    spec="$1"
+    old_ifs=$IFS
+    IFS=,
+    # shellcheck disable=SC2086
+    set -- $spec
+    IFS=$old_ifs
+    if [ $# -lt 3 ]; then
+        log "ignoring malformed eve_gpio_expose=$spec"
+        return
+    fi
+    name=$1 chip=$2
+    shift 2
+    case "$name" in
+        ''|*/*|.*) log "invalid chip name '$name' in eve_gpio_expose=$spec"; return ;;
+    esac
+    for l in "$@"; do
+        case "$l" in
+            *=*) off=${l%%=*} ;;
+            *) off=$l ;;
+        esac
+        case "$off" in
+            ''|*[!0-9]*) log "invalid line '$l' in eve_gpio_expose=$spec"; return ;;
+        esac
+    done
+
+    if [ -n "$DRYRUN" ]; then
+        log "dry run: would expose $# lines of $chip as $DEVDIR/$name: $*"
+        return
+    fi
+
+    dir="$AGG/$name"
+    if [ -e "$dir" ]; then
+        log "$name already exists, skipping"
+        return
+    fi
+    mkdir "$dir" || { log "can't create $dir"; return; }
+    i=0
+    for l in "$@"; do
+        off=${l%%=*}
+        mkdir "$dir/line$i" &&
+            echo "$chip" > "$dir/line$i/key" &&
+            echo "$off" > "$dir/line$i/offset" || {
+                log "can't configure line$i of $name"; return; }
+        case "$l" in
+            *=*) echo "${l#*=}" > "$dir/line$i/name" ;;
+        esac
+        i=$((i + 1))
+    done
+
+    # live=1 probes synchronously and fails while the source chip is
+    # missing. Keep trying: a chip that probes late is normal, and a wrong
+    # label only costs a write every 10 s, logged so it can be spotted.
+    waited=0 delay=2 next_log=60
+    until echo 1 > "$dir/live" 2>/dev/null; do
+        if [ "$waited" -ge "$next_log" ]; then
+            log "$name: still waiting for chip $chip after ${waited}s"
+            next_log=$((next_log + 600))
+        fi
+        sleep "$delay"
+        waited=$((waited + delay))
+        [ "$delay" -lt 10 ] && delay=$((delay * 2))
+        [ "$delay" -gt 10 ] && delay=10
+    done
+
+    dev=$(cat "$dir/dev_name")
+    for c in /sys/devices/platform/"$dev"/gpiochip*; do
+        [ -e "$c" ] || continue
+        cdev="/dev/${c##*/}"
+        mkdir -p "$DEVDIR" && ln -sfn "$cdev" "$DEVDIR/$name"
+        log "$DEVDIR/$name -> $cdev: $i lines of $chip ($*), after ${waited}s"
+        return
+    done
+    log "$name: aggregator $dev is live but has no gpiochip"
+}
+
+specs=""
+for arg in $(cat /proc/cmdline); do
+    case "$arg" in
+        eve_gpio_expose=*) specs="$specs ${arg#eve_gpio_expose=}" ;;
+    esac
+done
+[ -n "$specs" ] || exit 0
+
+if [ -z "$DRYRUN" ]; then
+    if [ ! -d "$AGG" ]; then
+        grep -q " $CONFIGFS configfs " /proc/mounts 2>/dev/null ||
+            mount -t configfs configfs "$CONFIGFS" 2>/dev/null
+    fi
+    if [ ! -d "$AGG" ]; then
+        log "no $AGG (CONFIG_GPIO_AGGREGATOR?), skipping"
+        exit 0
+    fi
+fi
+
+for s in $specs; do
+    if [ -n "$DRYRUN" ]; then
+        expose "$s"
+    else
+        expose "$s" &
+    fi
+done
+exit 0
