@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Zededa, Inc.
+# yaml-language-server: $schema=schema.json
+#
+# OnLogic FR101: a productised Qualcomm RB3 Gen 2 (QCS6490) with the same DSP
+# firmware, so FastRPC uses the RB3 Gen 2 DSP libraries. The key is the FR101's
+# device tree model.
+machines:
+  OnLogic FR101:
+    DSP_LIBRARY_PATH: qcm6490/Thundercomm/RB3gen2/dsp
