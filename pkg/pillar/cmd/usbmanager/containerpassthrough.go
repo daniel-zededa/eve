@@ -551,6 +551,24 @@ func (uc *usbmanagerController) disconnectUSBDeviceFromContainer(up usbpassthrou
 	uc.containerQueue.add(containerName)
 }
 
+// refreshContainerDevices queues the containers holding the USB device a
+// device node (sysPath) belongs to, when that node comes or goes. Interface
+// drivers probe after the USB device binds, which is when it is passed
+// through, so e.g. a camera's /dev/videoN usually comes later.
+func (uc *usbmanagerController) refreshContainerDevices(sysPath string) {
+	uc.Lock()
+	defer uc.Unlock()
+
+	for containerName, wants := range uc.containerWants {
+		for _, sysDir := range wants {
+			if strings.HasPrefix(sysPath, sysDir+"/") {
+				uc.containerQueue.add(containerName)
+				break
+			}
+		}
+	}
+}
+
 func containsNode(nodes []devNode, n devNode) bool {
 	for _, m := range nodes {
 		if m == n {

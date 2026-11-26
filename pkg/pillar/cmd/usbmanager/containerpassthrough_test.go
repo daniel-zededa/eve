@@ -473,3 +473,38 @@ func TestReconcileRunsWithoutTheLock(t *testing.T) {
 		t.Fatal("the device filter was set under the controller's lock")
 	}
 }
+
+// A camera's /dev/videoN comes after the usb device bound, when its interface
+// driver probes: the container gets it then, and loses it again when it goes.
+func TestRefreshContainerDevicesFollowsLateNodes(t *testing.T) {
+	env := newContainerTestEnv(t)
+	uc := env.controller()
+
+	// the camera as it is when it binds: no video interface yet
+	sys := filepath.Join(t.TempDir(), "1-3")
+	writeFile(t, filepath.Join(sys, "devnum"), "5\n")
+	writeFile(t, filepath.Join(sys, "uevent"), "MAJOR=189\nMINOR=4\nDEVNAME=bus/usb/001/005\n")
+	connectAndReconcile(uc, cameraPassthrough(sys))
+	env.expectFilter("a *:* rwm false", "c 189:4 rwm true")
+
+	video := filepath.Join(sys, "1-3:1.0", "video4linux", "video2")
+	writeFile(t, filepath.Join(video, "uevent"), "MAJOR=81\nMINOR=2\nDEVNAME=video2\n")
+	uc.refreshContainerDevices(video)
+	uc.reconcileQueuedContainers()
+	env.expectFilter("a *:* rwm false", "c 189:4 rwm true", "c 81:2 rwm true")
+	env.expectNodes(true, "video2")
+
+	if err := os.RemoveAll(filepath.Join(sys, "1-3:1.0")); err != nil {
+		t.Fatal(err)
+	}
+	uc.refreshContainerDevices(video)
+	uc.reconcileQueuedContainers()
+	env.expectFilter("a *:* rwm false", "c 189:4 rwm true")
+	env.expectNodes(false, "video2")
+
+	// an event below another usb device queues nothing
+	uc.refreshContainerDevices("/sys/devices/elsewhere/2-1/2-1:1.0/video4linux/video9")
+	if names := uc.containerQueue.take(); len(names) != 0 {
+		t.Fatalf("queued %v for an unrelated event", names)
+	}
+}

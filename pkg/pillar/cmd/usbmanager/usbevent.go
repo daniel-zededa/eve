@@ -75,6 +75,13 @@ func (ul *ueventListener) readEvents() bool {
 		}
 
 		if ud == nil {
+			// The node of a device below a usb device, e.g. the
+			// /dev/videoN of a camera's interface, can come after the
+			// usb device bound, or go before it is removed.
+			if _, hasNode := evt.Vars["DEVNAME"]; hasNode &&
+				(evt.Action == "add" || evt.Action == "remove") {
+				ul.uc.refreshContainerDevices(filepath.Join(sysFSPath, evt.Devpath))
+			}
 			continue
 		}
 
