@@ -204,6 +204,10 @@ func (uc *usbmanagerController) connectUSBDeviceToQemuImpl(up usbpassthrough) {
 	if up.vm == nil {
 		return
 	}
+	if up.vm.isContainer() {
+		uc.connectUSBDeviceToContainer(up)
+		return
+	}
 	log.Tracef("connect usb passthrough %+v to %s\n", up, up.vm.qmpSocketPath)
 
 	err := hypervisor.QmpExecDeviceAdd(up.vm.qmpSocketPath, up.usbdevice.qemuDeviceName(), up.usbdevice.busnum, up.usbdevice.devnum)
@@ -214,6 +218,10 @@ func (uc *usbmanagerController) connectUSBDeviceToQemuImpl(up usbpassthrough) {
 
 func (uc *usbmanagerController) disconnectUSBDeviceFromQemuImpl(up usbpassthrough) {
 	if up.vm == nil {
+		return
+	}
+	if up.vm.isContainer() {
+		uc.disconnectUSBDeviceFromContainer(up)
 		return
 	}
 	log.Tracef("disconnect usb passthrough %+v to %s\n", up, up.vm.qmpSocketPath)
@@ -301,7 +309,7 @@ func (uc *usbmanagerController) removeVirtualmachine(vm virtualmachine) {
 	defer uc.Unlock()
 	ups := uc.usbpassthroughs.usbpassthroughsOfVM(vm)
 
-	storedVM := uc.usbpassthroughs.vms[vm.qmpSocketPath]
+	storedVM := uc.usbpassthroughs.vms[vm.key()]
 	if storedVM != nil {
 		vm = *storedVM
 	}
@@ -417,4 +425,13 @@ func (uc *usbmanagerController) updateUSBDevicePassthroughs(usbpassthroughsAndUs
 
 func (uc *usbmanagerController) cancel() {
 	uc.listenUSBStopChan <- struct{}{}
+}
+
+// connectUSBDeviceToContainer is where a usb device is passed through to a
+// native container, which has no QEMU to device_add it to.
+func (uc *usbmanagerController) connectUSBDeviceToContainer(up usbpassthrough) {
+	log.Noticef("usb passthrough of %+v to %s is not supported for native containers\n", up.usbdevice, up.vm)
+}
+
+func (uc *usbmanagerController) disconnectUSBDeviceFromContainer(up usbpassthrough) {
 }

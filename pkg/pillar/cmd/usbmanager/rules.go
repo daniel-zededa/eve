@@ -24,8 +24,14 @@ const (
 	passthroughForbid = iota
 )
 
+// virtualmachine is the target of a usb passthrough: a QEMU domain, reached
+// through its QMP socket, or a native container (VirtualizationMode NOHYPER),
+// which has no QEMU and gets the device nodes instead.
 type virtualmachine struct {
 	qmpSocketPath string
+	// containerName is the containerd container of a native container;
+	// empty for QEMU domains
+	containerName string
 	adapters      []string
 }
 
@@ -42,11 +48,33 @@ func newVirtualmachine(qmpSocketPath string, adapters []string) virtualmachine {
 	return vm
 }
 
+func newContainerTarget(containerName string, adapters []string) virtualmachine {
+	vm := newVirtualmachine("", adapters)
+	vm.containerName = containerName
+
+	return vm
+}
+
+func (vm virtualmachine) isContainer() bool {
+	return vm.containerName != ""
+}
+
+// key identifies the target in the passthrough bookkeeping
+func (vm virtualmachine) key() string {
+	if vm.isContainer() {
+		return "container:" + vm.containerName
+	}
+	return vm.qmpSocketPath
+}
+
 func (vm *virtualmachine) addAdapter(adapter string) {
 	vm.adapters = append(vm.adapters, adapter)
 }
 
 func (vm virtualmachine) String() string {
+	if vm.isContainer() {
+		return fmt.Sprintf("container: %s adapters: '%s'", vm.containerName, strings.Join(vm.adapters, ", "))
+	}
 	return fmt.Sprintf("vm-qmp: %s adapters: '%s'", vm.qmpSocketPath, strings.Join(vm.adapters, ", "))
 }
 

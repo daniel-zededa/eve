@@ -13,8 +13,8 @@ func (up usbpassthrough) String() string {
 }
 
 type usbpassthroughs struct {
-	vms                      map[string]*virtualmachine // by qmp path
-	vmsByIOBundlePhyLabelMap map[string]*virtualmachine // by phylabel, by qmp path
+	vms                      map[string]*virtualmachine // by virtualmachine.key()
+	vmsByIOBundlePhyLabelMap map[string]*virtualmachine // by phylabel
 
 	usbpassthroughs     map[string]*usbpassthrough
 	usbpassthroughsByVM map[string]map[string]*usbpassthrough
@@ -66,20 +66,20 @@ func (ups *usbpassthroughs) delUsbdevice(ud *usbdevice) {
 }
 
 func (ups *usbpassthroughs) addVM(vm *virtualmachine) {
-	ups.vms[vm.qmpSocketPath] = vm
+	ups.vms[vm.key()] = vm
 	for _, phyLabel := range vm.adapters {
 		ups.addVMByIOBundlePhyLabel(phyLabel, vm)
 	}
 }
 
 func (ups *usbpassthroughs) delVM(vm *virtualmachine) {
-	vmDel := ups.vms[vm.qmpSocketPath]
+	vmDel := ups.vms[vm.key()]
 	if vmDel != nil && vmDel.adapters != nil {
 		for _, phyLabel := range vmDel.adapters {
 			delete(ups.vmsByIOBundlePhyLabelMap, phyLabel)
 		}
 	}
-	delete(ups.vms, vm.qmpSocketPath)
+	delete(ups.vms, vm.key())
 }
 
 func (ups usbpassthroughs) hasUsbpassthrough(ud usbdevice) bool {
@@ -89,15 +89,15 @@ func (ups usbpassthroughs) hasUsbpassthrough(ud usbdevice) bool {
 
 func (ups *usbpassthroughs) addUsbpassthrough(up *usbpassthrough) {
 	ups.usbpassthroughs[up.String()] = up
-	if ups.usbpassthroughsByVM[up.vm.qmpSocketPath] == nil {
-		ups.usbpassthroughsByVM[up.vm.qmpSocketPath] = make(map[string]*usbpassthrough)
+	if ups.usbpassthroughsByVM[up.vm.key()] == nil {
+		ups.usbpassthroughsByVM[up.vm.key()] = make(map[string]*usbpassthrough)
 	}
-	ups.usbpassthroughsByVM[up.vm.qmpSocketPath][up.usbdevice.ueventFilePath] = up
+	ups.usbpassthroughsByVM[up.vm.key()][up.usbdevice.ueventFilePath] = up
 }
 
 func (ups *usbpassthroughs) delUsbpassthrough(up *usbpassthrough) {
 	if up.vm != nil {
-		delete(ups.usbpassthroughsByVM, up.vm.qmpSocketPath)
+		delete(ups.usbpassthroughsByVM, up.vm.key())
 	}
 	ups.usbpassthroughs[up.String()].vm = nil
 }
@@ -107,5 +107,5 @@ func (ups usbpassthroughs) usbpassthroughsOfUsbdevice(ud usbdevice) *usbpassthro
 }
 
 func (ups usbpassthroughs) usbpassthroughsOfVM(vm virtualmachine) map[string]*usbpassthrough {
-	return ups.usbpassthroughsByVM[vm.qmpSocketPath]
+	return ups.usbpassthroughsByVM[vm.key()]
 }

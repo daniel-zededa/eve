@@ -104,3 +104,28 @@ func TestAssignableAdaptersModifySwapKeepsRules(t *testing.T) {
 		}
 	}
 }
+
+// A native container has no QEMU: its usb devices go to the container itself,
+// while VMs, and containers in a shim VM, keep going to their QMP socket.
+func TestPassthroughTargetOfNativeContainer(t *testing.T) {
+	adapters := []types.IoAdapter{{Name: "VIDEO"}}
+
+	native := passthroughTarget(types.DomainStatus{DomainName: "app.1.1",
+		VmConfig: types.VmConfig{VirtualizationMode: types.NOHYPER}, IoAdapterList: adapters})
+	if !native.isContainer() || native.containerName != "app.1.1" || native.qmpSocketPath != "" {
+		t.Fatalf("native container got target %+v", native)
+	}
+
+	vm := passthroughTarget(types.DomainStatus{DomainName: "app.1.1",
+		VmConfig: types.VmConfig{VirtualizationMode: types.HVM}, IoAdapterList: adapters})
+	if vm.isContainer() || vm.qmpSocketPath == "" {
+		t.Fatalf("VM got target %+v", vm)
+	}
+
+	if native.key() == vm.key() {
+		t.Fatalf("container and VM targets share the key %q", native.key())
+	}
+	if len(native.adapters) != 1 || native.adapters[0] != "VIDEO" {
+		t.Fatalf("adapters %v, want [VIDEO]", native.adapters)
+	}
+}

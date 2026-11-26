@@ -101,27 +101,32 @@ func (usbCtx *usbmanagerContext) handleDomainStatusModify(_ interface{}, _ strin
 
 }
 
-func (usbCtx *usbmanagerContext) handleDomainStatusNotRunning(status types.DomainStatus) {
-	qmp := hypervisor.GetQmpExecutorSocket(status.DomainName)
-	vm := newVirtualmachine(qmp, nil)
+// passthroughTarget returns where usb devices of a domain go: the QEMU of a
+// VM (or of the shim VM of a container), or, for a native container
+// (VirtualizationMode NOHYPER), the container itself.
+func passthroughTarget(status types.DomainStatus) virtualmachine {
+	var vm virtualmachine
+	if status.VirtualizationMode == types.NOHYPER {
+		vm = newContainerTarget(status.DomainName, nil)
+	} else {
+		vm = newVirtualmachine(hypervisor.GetQmpExecutorSocket(status.DomainName), nil)
+	}
 
 	for _, io := range status.IoAdapterList {
 		vm.addAdapter(io.Name)
 	}
 
-	usbCtx.controller.removeVirtualmachine(vm)
+	return vm
+}
+
+func (usbCtx *usbmanagerContext) handleDomainStatusNotRunning(status types.DomainStatus) {
+	usbCtx.controller.removeVirtualmachine(passthroughTarget(status))
 }
 
 func (usbCtx *usbmanagerContext) handleDomainStatusRunning(status types.DomainStatus) {
-	qmp := hypervisor.GetQmpExecutorSocket(status.DomainName)
-	vm := newVirtualmachine(qmp, nil)
-
 	log.Tracef("display name: %+v\n", status.DisplayName)
-	for _, io := range status.IoAdapterList {
-		vm.addAdapter(io.Name)
-	}
 
-	usbCtx.controller.addVirtualmachine(vm)
+	usbCtx.controller.addVirtualmachine(passthroughTarget(status))
 	usbCtx.controller.Lock()
 	log.Tracef("rule engine: %s\n", usbCtx.controller.ruleEngine)
 	usbCtx.controller.Unlock()
