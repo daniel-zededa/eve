@@ -32,6 +32,8 @@ RUN eve-alpine-deploy.sh
 RUN rm -f /sbin/poweroff /etc/mkinitfs/features.d/base.files
 COPY initrd/base.files /etc/mkinitfs/features.d/base.files
 COPY initrd/init-initrd initrd/mount_disk.sh initrd/udhcpc_script.sh /
+COPY initrd/usb-links /
+COPY initrd/mdev.conf /etc/mdev.conf
 COPY initrd/poweroff /sbin/poweroff
 COPY initrd/chroot2.c initrd/hacf.c /tmp/
 COPY initrd/00000080 /etc/acpi/PWRF/

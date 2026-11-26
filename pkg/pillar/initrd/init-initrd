@@ -122,6 +122,20 @@ modprobe wireguard
 mod_res=$?
 echo "Modprobe wireguard, result $mod_res"
 
+# USB devices the host passes through to this VM, at boot or while the app
+# runs: devtmpfs creates their nodes, which the app sees through the rbind
+# of /dev, but nothing loads their drivers or adds the /dev/*/by-id links
+# udev adds on the host. mdev (/etc/mdev.conf) does that for devices that
+# come later; for those already here, load the drivers and add the links
+# now. mdev -s is not used: it would also reset the modes of existing nodes.
+echo /bin/mdev > /proc/sys/kernel/hotplug
+find /sys/devices -name modalias -exec cat {} + 2>/dev/null | sort -u | \
+    xargs -r modprobe -b -q -a 2>/dev/null
+for node in /sys/class/video4linux/video* /sys/class/tty/ttyACM* /sys/class/tty/ttyUSB*; do
+    [ -e "$node" ] || continue
+    MDEV="${node##*/}" DEVPATH="${node#/sys}" /usb-links
+done
+
 # mount modules shared by EVE-OS in /mnt/modules to /lib/modules
 # if /lib/modules inside container is not empty we will silently ignore the content
 # we use overlayfs to allow replacing of modules from user's entrypoint scripts

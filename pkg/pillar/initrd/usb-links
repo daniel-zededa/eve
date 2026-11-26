@@ -1,0 +1,64 @@
+#!/bin/sh
+# Adds or removes the /dev/v4l/by-id or /dev/serial/by-id link of a usb video
+# or serial node, named the way udev names it on the host:
+#   usb-<manufacturer>_<product>[_<serial>]-video-index<N>
+#   usb-<manufacturer>_<product>[_<serial>]-if<NN>[-port0]
+# Called by mdev (MDEV, ACTION, DEVPATH) and by init-initrd for the nodes
+# that exist at boot.
+
+dev="$MDEV"
+[ -n "$dev" ] && [ -n "$DEVPATH" ] || exit 0
+
+# On remove the device is already gone from sysfs, so its link can't be
+# named again: remove whatever by-id link points at the node.
+if [ "$ACTION" = remove ]; then
+    for link in /dev/v4l/by-id/* /dev/serial/by-id/*; do
+        [ -L "$link" ] && [ "$(readlink "$link")" = "../../$dev" ] && rm -f "$link"
+    done
+    exit 0
+fi
+
+# from the class device up to its usb interface and usb device
+iface=
+usbdev=
+d=$(readlink -f "/sys$DEVPATH")
+while [ -n "$d" ] && [ "$d" != "/sys" ]; do
+    if [ -z "$iface" ] && [ -f "$d/bInterfaceNumber" ]; then
+        iface="$d"
+    fi
+    if [ -f "$d/idVendor" ]; then
+        usbdev="$d"
+        break
+    fi
+    d="${d%/*}"
+done
+[ -n "$usbdev" ] || exit 0
+
+# udev's replacement of whitespace and unsafe characters
+clean() {
+    printf '%s' "$1" | sed 's/[[:space:]][[:space:]]*/_/g; s/[^0-9A-Za-z#+.:=@_-]/_/g'
+}
+vendor=$(cat "$usbdev/manufacturer" 2>/dev/null || cat "$usbdev/idVendor")
+model=$(cat "$usbdev/product" 2>/dev/null || cat "$usbdev/idProduct")
+id="$(clean "$vendor")_$(clean "$model")"
+serial=$(cat "$usbdev/serial" 2>/dev/null)
+[ -n "$serial" ] && id="${id}_$(clean "$serial")"
+
+case "$dev" in
+    video*)
+        dir=v4l/by-id
+        name="usb-$id-video-index$(cat "/sys$DEVPATH/index" 2>/dev/null || echo 0)"
+        ;;
+    ttyACM*|ttyUSB*)
+        dir=serial/by-id
+        ifnum=$(cat "$iface/bInterfaceNumber" 2>/dev/null)
+        name="usb-$id-if${ifnum:-00}"
+        case "$dev" in ttyUSB*) name="$name-port0" ;; esac
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+
+mkdir -p "/dev/$dir"
+ln -sf "../../$dev" "/dev/$dir/$name"

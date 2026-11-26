@@ -19,6 +19,8 @@
 /hacf
 /mount_disk.sh
 /udhcpc_script.sh
+/usb-links
+/etc/mdev.conf
 /mnt
 /bin/sh
 /sbin/poweroff
