@@ -19,6 +19,19 @@ type usbmanagerController struct {
 	connectUSBDeviceToQemu      func(up usbpassthrough)
 	disconnectUSBDeviceFromQemu func(up usbpassthrough)
 
+	// containerWants is, by native container, the sysfs directories of
+	// the USB devices it should have, by USB device; a container is in it
+	// while it runs. Guarded by the controller's lock.
+	containerWants map[string]map[string]string
+	// containerQueue holds containers for the reconcile worker
+	containerQueue *containerQueue
+	// applied and reportedErrors are the reconcile worker's own
+	applied        map[string]*appliedContainer
+	reportedErrors map[string]string
+	// publishPassthroughError publishes what went wrong passing devices
+	// through to a container, "" when nothing did
+	publishPassthroughError func(containerName, errStr string)
+
 	listenUSBStopChan chan struct{}
 
 	iobt *ioBundleTree
@@ -35,6 +48,10 @@ func (uc *usbmanagerController) init() {
 	uc.ruleEngine.addRule(&usbHubForbidPassthroughRule{})
 
 	uc.usbpassthroughs = newUsbpassthroughs()
+	uc.containerWants = make(map[string]map[string]string)
+	uc.containerQueue = newContainerQueue()
+	uc.applied = make(map[string]*appliedContainer)
+	uc.reportedErrors = make(map[string]string)
 
 	uc.connectUSBDeviceToQemu = uc.connectUSBDeviceToQemuImpl
 	uc.disconnectUSBDeviceFromQemu = uc.disconnectUSBDeviceFromQemuImpl
@@ -273,6 +290,9 @@ func (uc *usbmanagerController) addVirtualmachine(vm virtualmachine) {
 	defer uc.Unlock()
 	log.Tracef("add vm %+v", vm)
 	uc.usbpassthroughs.addVM(&vm)
+	if vm.isContainer() {
+		uc.wantContainer(vm.containerName)
+	}
 
 	// add rules
 	for _, phyLabel := range vm.adapters {
@@ -343,6 +363,9 @@ func (uc *usbmanagerController) removeVirtualmachine(vm virtualmachine) {
 	}
 
 	uc.usbpassthroughs.delVM(&vm)
+	if vm.isContainer() {
+		uc.forgetContainer(vm.containerName)
+	}
 	uc.updateAllUSBDevicePassthroughs()
 }
 
@@ -425,13 +448,4 @@ func (uc *usbmanagerController) updateUSBDevicePassthroughs(usbpassthroughsAndUs
 
 func (uc *usbmanagerController) cancel() {
 	uc.listenUSBStopChan <- struct{}{}
-}
-
-// connectUSBDeviceToContainer is where a usb device is passed through to a
-// native container, which has no QEMU to device_add it to.
-func (uc *usbmanagerController) connectUSBDeviceToContainer(up usbpassthrough) {
-	log.Noticef("usb passthrough of %+v to %s is not supported for native containers\n", up.usbdevice, up.vm)
-}
-
-func (uc *usbmanagerController) disconnectUSBDeviceFromContainer(up usbpassthrough) {
 }

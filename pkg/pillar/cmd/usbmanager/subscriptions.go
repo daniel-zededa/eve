@@ -66,6 +66,8 @@ func (usbCtx *usbmanagerContext) subscribe(ps *pubsub.PubSub) {
 	}
 	usbCtx.subscriptions = append(usbCtx.subscriptions, subDomainStatus)
 
+	usbCtx.controller.startContainerReconciler(make(chan struct{}))
+
 	for _, sub := range usbCtx.subscriptions {
 		err := sub.Activate()
 		if err != nil {
