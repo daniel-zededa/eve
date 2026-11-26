@@ -377,19 +377,24 @@ func (s *ociSpec) UpdateWithIoBundles(config *types.DomainConfig, aa *types.Assi
 				devList = append(devList, ib.Serial)
 			}
 
-			// Generic devices. Some appear late in boot (e.g. a GPIO
-			// chip built by dom0-ztools 008-gpio-expose once its pin
-			// controller probes): wait for the device rather than start
+			// Generic devices. A GPIO chip built by dom0-ztools
+			// 008-gpio-expose (/dev/gpio/<name>) appears late in boot,
+			// once its pin controller probes, but it does appear if the
+			// board is configured right: wait for it rather than start
 			// the application without it, and fail the start if it never
-			// comes, so domainmgr reports it and retries.
+			// comes, so domainmgr reports it and retries. Other devices
+			// (e.g. a USB camera) may simply not be plugged in; they are
+			// not waited for.
 			if ib.Type == types.IoOther && ib.Ifname != "" {
-				err := devwait.ForCharDevice(ib.Ifname, devwait.DefaultTimeout,
-					func(format string, args ...interface{}) {
-						logrus.Infof("I/O adapter %s: "+format,
-							append([]interface{}{ib.Logicallabel}, args...)...)
-					})
-				if err != nil {
-					return fmt.Errorf("I/O adapter %s: %w", ib.Logicallabel, err)
+				if strings.HasPrefix(ib.Ifname, devwait.GPIOExposeDir) {
+					err := devwait.ForCharDevice(ib.Ifname, devwait.DefaultTimeout,
+						func(format string, args ...interface{}) {
+							logrus.Infof("I/O adapter %s: "+format,
+								append([]interface{}{ib.Logicallabel}, args...)...)
+						})
+					if err != nil {
+						return fmt.Errorf("I/O adapter %s: %w", ib.Logicallabel, err)
+					}
 				}
 				logrus.Infof("Adding generic device %s\n", ib.Ifname)
 				devList = append(devList, ib.Ifname)

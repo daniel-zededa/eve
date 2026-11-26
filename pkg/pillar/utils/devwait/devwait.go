@@ -19,6 +19,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// GPIOExposeDir is where dom0-ztools 008-gpio-expose creates the GPIO chips a
+// board exposes (eve_gpio_expose=). They are created late in boot, once their
+// pin controller probes; applications given one wait for it.
+const GPIOExposeDir = "/dev/gpio/"
+
 // DefaultTimeout is how long application start waits for an assigned device
 // node. It covers devices created late in boot; a device still missing after
 // that is reported as an error.
