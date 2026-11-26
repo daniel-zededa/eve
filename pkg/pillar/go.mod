@@ -6,6 +6,7 @@ require (
 	github.com/Masterminds/semver v1.5.0
 	github.com/anatol/smart.go v0.0.0-20241126061019-f03d79b340d2
 	github.com/andrewd-zededa/go-libzfs v0.0.0-20251014191158-755aaeb96a92
+	github.com/cilium/ebpf v0.17.3
 	github.com/containerd/cgroups/v3 v3.1.0
 	github.com/containerd/containerd v1.7.36
 	github.com/containerd/containerd/api v1.8.0
@@ -39,6 +40,7 @@ require (
 	github.com/moby/sys/mountinfo v0.7.3
 	github.com/multiplay/go-edac v1.0.1
 	github.com/onsi/gomega v1.36.1
+	github.com/opencontainers/cgroups v0.0.4
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/opencontainers/runtime-spec v1.2.0
@@ -208,6 +210,7 @@ require (
 	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/platforms v0.2.1 // indirect
+	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
 	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.39.1-0.20260819172001-e6e3fd93e4be // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.3.3 // indirect
@@ -218,6 +221,7 @@ require (
 	github.com/go-kit/log v0.2.1 // indirect
 	github.com/go-logfmt/logfmt v0.6.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/gnostic-models v0.6.9 // indirect

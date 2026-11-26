@@ -312,6 +312,21 @@ github.com/chai2010/gettext-go
 github.com/chai2010/gettext-go/mo
 github.com/chai2010/gettext-go/plural
 github.com/chai2010/gettext-go/po
+# github.com/cilium/ebpf v0.17.3
+## explicit; go 1.22
+github.com/cilium/ebpf
+github.com/cilium/ebpf/asm
+github.com/cilium/ebpf/btf
+github.com/cilium/ebpf/internal
+github.com/cilium/ebpf/internal/kallsyms
+github.com/cilium/ebpf/internal/kconfig
+github.com/cilium/ebpf/internal/linux
+github.com/cilium/ebpf/internal/sys
+github.com/cilium/ebpf/internal/sysenc
+github.com/cilium/ebpf/internal/testutils/fdtrace
+github.com/cilium/ebpf/internal/tracefs
+github.com/cilium/ebpf/internal/unix
+github.com/cilium/ebpf/link
 # github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2
 ## explicit; go 1.24.6
 github.com/cncf/xds/go/udpa/annotations
@@ -437,8 +452,12 @@ github.com/containerd/ttrpc
 # github.com/containerd/typeurl/v2 v2.2.0
 ## explicit; go 1.21
 github.com/containerd/typeurl/v2
+# github.com/coreos/go-systemd/v22 v22.5.0
+## explicit; go 1.12
+github.com/coreos/go-systemd/v22/dbus
 # github.com/cyphar/filepath-securejoin v0.7.0
 ## explicit; go 1.18
+github.com/cyphar/filepath-securejoin
 github.com/cyphar/filepath-securejoin/internal/consts
 github.com/cyphar/filepath-securejoin/pathrs-lite
 github.com/cyphar/filepath-securejoin/pathrs-lite/internal
@@ -644,6 +663,9 @@ github.com/go-playground/universal-translator
 # github.com/go-playground/validator/v10 v10.15.5
 ## explicit; go 1.18
 github.com/go-playground/validator/v10
+# github.com/godbus/dbus/v5 v5.1.0
+## explicit; go 1.12
+github.com/godbus/dbus/v5
 # github.com/gogo/protobuf v1.3.2
 ## explicit; go 1.15
 github.com/gogo/protobuf/proto
@@ -975,6 +997,16 @@ github.com/onsi/gomega/matchers/support/goraph/edge
 github.com/onsi/gomega/matchers/support/goraph/node
 github.com/onsi/gomega/matchers/support/goraph/util
 github.com/onsi/gomega/types
+# github.com/opencontainers/cgroups v0.0.4
+## explicit; go 1.23.0
+github.com/opencontainers/cgroups
+github.com/opencontainers/cgroups/devices
+github.com/opencontainers/cgroups/devices/config
+github.com/opencontainers/cgroups/fs
+github.com/opencontainers/cgroups/fs2
+github.com/opencontainers/cgroups/fscommon
+github.com/opencontainers/cgroups/internal/path
+github.com/opencontainers/cgroups/systemd
 # github.com/opencontainers/go-digest v1.0.0
 ## explicit; go 1.13
 github.com/opencontainers/go-digest
