@@ -30,6 +30,15 @@ const (
 	USBHubProductID = 0x55aa
 )
 
+// USBSerialVendorID and USBSerialProductID are the ids of QEMU's emulated
+// USB serial adapter (hw/usb/dev-serial.c), the FTDI FT232 that
+// AttachUSBSerial plugs in. Linux drives it with ftdi_sio, which creates a
+// ttyUSB node once the interface binds, after the USB device itself.
+const (
+	USBSerialVendorID  = 0x0403
+	USBSerialProductID = 0x6001
+)
+
 // USBDeviceInfo is one USB device as EVE's kernel enumerates it under
 // /sys/bus/usb/devices. (USBDevice, the vendor/product pair, is a requirement
 // type; see requirements.go.)
@@ -329,6 +338,84 @@ func (d *EdgeDevice) DetachUSBStorage(id string) {
 	d.DeleteScratchImage(id)
 	d.releaseUSBPort(id)
 	Logger().Infof("Detached USB flash drive %q from device %q", id, d.devName)
+}
+
+// usbSerialChardevSuffix names the chardev backing a USB serial adapter.
+const usbSerialChardevSuffix = "-chr"
+
+// AttachUSBSerial plugs a USB serial adapter into the running device: QEMU's
+// usb-serial device (an FTDI FT232, USBSerialVendorID:USBSerialProductID)
+// backed by a ringbuf chardev, on the VM's xHCI controller (USBControllerBus).
+// QEMU attaches a usb-serial device to the bus only while its chardev is
+// open, which a null chardev never is.
+// id is the QEMU device id and the adapter's USB serial number, so that
+// ListUSBDevices finds it with FindBySerial(id); the chardev is
+// id+"-chr". Ports are chosen as for AttachUSBStorage. Returns the port, e.g.
+// "2". Fails the test on error, undoing the steps already done.
+//
+// Unlike a flash drive, the adapter's device node (ttyUSBN) comes from a
+// driver that binds after the USB device, ftdi_sio, which EVE builds as a
+// module, so it also exercises driver loading and late device nodes.
+//
+// Requires RequireCapabilities{CAPABILITY_QMP}.
+func (d *EdgeDevice) AttachUSBSerial(id string) string {
+	return d.attachUSBSerial(id, "")
+}
+
+// AttachUSBSerialBehind is AttachUSBSerial into the lowest free port of the
+// hub hubID (see AttachUSBHub) instead of the controller.
+func (d *EdgeDevice) AttachUSBSerialBehind(hubID, id string) string {
+	return d.attachUSBSerial(id, hubID)
+}
+
+func (d *EdgeDevice) attachUSBSerial(id, parentHubID string) string {
+	chardev := id + usbSerialChardevSuffix
+	_, err := d.TryExecuteQMP("chardev-add", map[string]any{
+		"id":      chardev,
+		"backend": map[string]any{"type": "ringbuf", "data": map[string]any{}},
+	})
+	if err != nil {
+		d.th.t.Fatalf("AttachUSBSerial: %v", err)
+	}
+	port := d.claimUSBPortBelow(id, parentHubID)
+	_, err = d.TryExecuteQMP("device_add", map[string]any{
+		"driver":  "usb-serial",
+		"id":      id,
+		"bus":     USBControllerBus,
+		"port":    port,
+		"chardev": chardev,
+		"serial":  id,
+	})
+	if err != nil {
+		d.releaseUSBPort(id)
+		if _, delErr := d.TryExecuteQMP("chardev-remove", map[string]any{"id": chardev}); delErr != nil {
+			Logger().Warnf("AttachUSBSerial: cleanup failed: %v", delErr)
+		}
+		d.th.t.Fatalf("AttachUSBSerial: %v", err)
+	}
+	Logger().Infof("Attached USB serial adapter %q to port %s of device %q", id, port, d.devName)
+	return port
+}
+
+// DetachUSBSerial unplugs an adapter attached by AttachUSBSerial and removes
+// its chardev. device_del completes asynchronously, so removing the chardev,
+// which QEMU refuses while the device holds it, is retried for a short while.
+func (d *EdgeDevice) DetachUSBSerial(id string) {
+	d.ExecuteQMP("device_del", map[string]any{"id": id})
+	deadline := time.Now().Add(usbStorageUnplugTimeout)
+	for {
+		_, err := d.TryExecuteQMP("chardev-remove", map[string]any{"id": id + usbSerialChardevSuffix})
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			d.th.t.Fatalf("DetachUSBSerial: chardev of %q still in use %v after device_del: %v",
+				id, usbStorageUnplugTimeout, err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	d.releaseUSBPort(id)
+	Logger().Infof("Detached USB serial adapter %q from device %q", id, d.devName)
 }
 
 // usbPortAllocator chooses the ports that the USB hot-plug helpers plug

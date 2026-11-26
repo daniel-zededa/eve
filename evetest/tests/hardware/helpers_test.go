@@ -4,6 +4,9 @@
 package hardware_test
 
 import (
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	// revive:disable:dot-imports
@@ -36,6 +39,12 @@ const (
 	// attaches to.
 	ubuntuCtrImage = "lfedge/evetest-ubuntu-ctr"
 	ubuntuCtrTag   = "1.0"
+	// ubuntuCtrNativeTag is the first version of the image whose sshd also
+	// starts in a native container (NOHYPER), where /run is an empty tmpfs.
+	// It is served from evetest's local registry (see
+	// usbContainerAppImage), so a locally built image works before it is
+	// published.
+	ubuntuCtrNativeTag = "1.4"
 
 	// Local network instance connecting the apps, and the first of the ports
 	// on the edge node forwarded to their sshd: every app the factory starts
@@ -163,28 +172,60 @@ func usbFlashPhysicalIO(name, usbAddr string) evetest.PhysicalIOConfig {
 	}
 }
 
+// usbProductPhysicalIO models a USB device as assignable by its ids,
+// "vvvv:pppp", whatever port it is plugged into.
+func usbProductPhysicalIO(name, usbProduct string) evetest.PhysicalIOConfig {
+	return evetest.PhysicalIOConfig{
+		LogicalLabel:    name,
+		PhysicalLabel:   name,
+		AssignmentGroup: name,
+		Type:            evecommon.PhyIoType_PhyIoUSBDevice,
+		USBProduct:      usbProduct,
+		Usage:           evecommon.PhyIoMemberUsage_PhyIoUsageDedicated,
+	}
+}
+
 // usbFlashAppConfig is the application the drive is assigned to: the ubuntu
 // test container as an HVM domain, reachable over SSH through the local NI
 // on the edge node's sshFwdPort, named after its adapter.
 func usbFlashAppConfig(ioAdapterName string, niUUID uuid.UUID,
 	sshFwdPort uint16) evetest.ApplicationInstanceConfig {
+	return usbAppConfig(ioAdapterName, evetest.DockerContainer{
+		ImageName: ubuntuCtrImage,
+		Tag:       ubuntuCtrTag,
+	}, eveconfig.VmMode_HVM, []string{ioAdapterName}, niUUID, sshFwdPort)
+}
+
+// usbContainerAppImage pushes the ubuntu test container in the version that
+// also runs natively (ubuntuCtrNativeTag) into evetest's local registry, from
+// the local Docker daemon or pulled from Docker Hub, and returns the image
+// reference EVE pulls it by.
+func usbContainerAppImage() (evetest.DockerContainer, error) {
+	return evetest.PushDockerImageToLocalRegistry(ubuntuCtrImage + ":" + ubuntuCtrNativeTag)
+}
+
+// usbAppConfig is the ubuntu test container image run in the given
+// virtualization mode (HVM: in a shim VM; NOHYPER: as a native container on
+// EVE's kernel) with the given USB devices directly assigned, reachable over
+// SSH through the local NI on the edge node's sshFwdPort.
+func usbAppConfig(displayName string, image evetest.DockerContainer, mode eveconfig.VmMode,
+	ioAdapterNames []string, niUUID uuid.UUID, sshFwdPort uint16) evetest.ApplicationInstanceConfig {
+	ioAdapters := make([]evetest.IOAdapterConfig, 0, len(ioAdapterNames))
+	for _, name := range ioAdapterNames {
+		ioAdapters = append(ioAdapters, evetest.IOAdapterConfig{
+			LogicalLabel: name,
+			Type:         evecommon.PhyIoType_PhyIoUSBDevice,
+		})
+	}
 	return evetest.ApplicationInstanceConfig{
-		DisplayName: ioAdapterName,
-		Activate:    true,
-		Image: evetest.DockerContainer{
-			ImageName: ubuntuCtrImage,
-			Tag:       ubuntuCtrTag,
-		},
-		VirtualizationMode: eveconfig.VmMode_HVM,
+		DisplayName:        displayName,
+		Activate:           true,
+		Image:              image,
+		VirtualizationMode: mode,
 		CPUs:               1,
 		MemoryBytes:        500 * evetest.MiB,
 		NetworkAdapters:    singleVIFWithSSH(niUUID, sshFwdPort),
-		IOAdapters: []evetest.IOAdapterConfig{
-			{
-				LogicalLabel: ioAdapterName,
-				Type:         evecommon.PhyIoType_PhyIoUSBDevice,
-			},
-		},
+		IOAdapters:         ioAdapters,
 	}
 }
 
@@ -362,4 +403,222 @@ func deleteAppAndWait(t *WithT, device *evetest.EdgeDevice,
 		func(info *eveinfo.ZInfoApp) bool {
 			return info.State == eveinfo.ZSwState_INVALID
 		})))
+}
+
+// containerUSBApp is the ubuntu test container with USB devices assigned, run
+// natively or in a shim VM, as seen from inside: its device nodes. Inside a
+// native container /sys is EVE's own, so a USB device is enumerated there
+// whether or not it is passed through; what passthrough gives a container is
+// the device's nodes in its /dev and the right to open them, and that is
+// what these probes look at.
+type containerUSBApp struct {
+	device *evetest.EdgeDevice
+	uuid   uuid.UUID
+}
+
+// appScriptTimeout bounds one probe run inside the app over SSH.
+const appScriptTimeout = 30 * time.Second
+
+// run executes a shell script inside the app and returns its stdout.
+func (a *containerUSBApp) run(script string) (string, error) {
+	stdout, _, err := a.device.RunShellScriptInsideApp(a.uuid, appAuth, script,
+		appScriptTimeout, 0)
+	return stdout, err
+}
+
+// serialPort is what the app sees of a USB serial adapter: the
+// /dev/serial/by-id link carrying its serial number, the node it resolves to,
+// the node's mode and whether the node can be opened.
+type serialPort struct {
+	Link string // name in /dev/serial/by-id, "" when there is none
+	Node string // e.g. /dev/ttyUSB0, "" when the link resolves to no tty node
+	Mode string // octal permission bits, e.g. "660"
+	// Major and Minor are the node's device numbers.
+	Major, Minor int
+	Open         bool
+}
+
+func (p serialPort) String() string {
+	if p.Link == "" {
+		return "no serial port"
+	}
+	return fmt.Sprintf("link %s -> node %q mode %s open %v", p.Link, p.Node, p.Mode, p.Open)
+}
+
+// serialPortScript prints the serialPort of the adapter with serial number
+// $1 as key=value lines. stty opens the node non-blocking, which a tty
+// without carrier needs, and fails with EPERM when the device cgroup denies
+// it.
+const serialPortScript = `
+l=$(ls /dev/serial/by-id/ 2>/dev/null | grep -F -- "$1" | head -1)
+[ -n "$l" ] || exit 0
+echo "link=$l"
+n=$(readlink -f "/dev/serial/by-id/$l")
+[ -c "$n" ] || exit 0
+echo "node=$n"
+echo "mode=$(stat -c %a "$n")"
+echo "dev=$(stat -c %t:%T "$n")"
+if stty -F "$n" >/dev/null 2>&1; then echo open=yes; else echo open=no; fi
+`
+
+// serialPort probes the USB serial adapter with the given serial number; a
+// method value for Eventually.
+func (a *containerUSBApp) serialPort(serial string) func() (serialPort, error) {
+	return func() (serialPort, error) {
+		out, err := a.run(withArgs(serialPortScript, serial))
+		if err != nil {
+			return serialPort{}, err
+		}
+		kv := parseKeyValues(out)
+		port := serialPort{Link: kv["link"], Node: kv["node"], Mode: kv["mode"],
+			Open: kv["open"] == "yes"}
+		if major, minor, ok := strings.Cut(kv["dev"], ":"); ok {
+			// stat prints device numbers in hex
+			maj, err1 := strconv.ParseInt(major, 16, 32)
+			mnr, err2 := strconv.ParseInt(minor, 16, 32)
+			if err1 != nil || err2 != nil {
+				return port, fmt.Errorf("unexpected device numbers %q", kv["dev"])
+			}
+			port.Major, port.Minor = int(maj), int(mnr)
+		}
+		return port, nil
+	}
+}
+
+// blockDiskScript prints node=<dev> and read=yes|no for the disk of the USB
+// device with serial number $1, found through sysfs (EVE's, in a native
+// container), or nothing when there is no such disk or no node for it in
+// /dev.
+const blockDiskScript = `
+for b in /sys/block/sd*; do
+  [ -e "$b" ] || continue
+  d=$(readlink -f "$b/device")
+  while [ -n "$d" ] && [ "$d" != / ]; do
+    if [ -f "$d/serial" ] && [ "$(cat "$d/serial")" = "$1" ]; then
+      n=/dev/${b##*/}
+      [ -b "$n" ] || exit 0
+      echo "node=$n"
+      if dd if="$n" of=/dev/null bs=512 count=1 2>/dev/null; then echo read=yes; else echo read=no; fi
+      exit 0
+    fi
+    d=${d%/*}
+  done
+done
+`
+
+// blockDisk is what the app sees of a USB flash drive: its disk node and
+// whether the first sector can be read.
+type blockDisk struct {
+	Node string // e.g. /dev/sda, "" when the app has no node for the drive
+	Read bool
+}
+
+func (b blockDisk) String() string {
+	if b.Node == "" {
+		return "no disk node"
+	}
+	return fmt.Sprintf("node %s readable %v", b.Node, b.Read)
+}
+
+// blockDisk probes the flash drive with the given serial number; a method
+// value for Eventually.
+func (a *containerUSBApp) blockDisk(serial string) func() (blockDisk, error) {
+	return func() (blockDisk, error) {
+		out, err := a.run(withArgs(blockDiskScript, serial))
+		if err != nil {
+			return blockDisk{}, err
+		}
+		kv := parseKeyValues(out)
+		return blockDisk{Node: kv["node"], Read: kv["read"] == "yes"}, nil
+	}
+}
+
+// canOpenCharDevice makes a char device node for major:minor in the app's
+// /tmp and reports whether it can be opened. In a native container a device
+// it wasn't given is refused by the device cgroup, at mknod or at open.
+func (a *containerUSBApp) canOpenCharDevice(major, minor int) (bool, error) {
+	out, err := a.run(fmt.Sprintf(`
+n=/tmp/evtest-chardev
+rm -f "$n"
+if mknod "$n" c %d %d 2>/dev/null && stty -F "$n" >/dev/null 2>&1; then echo open=yes; else echo open=no; fi
+rm -f "$n"
+`, major, minor))
+	if err != nil {
+		return false, err
+	}
+	return parseKeyValues(out)["open"] == "yes", nil
+}
+
+// containerDefaultDevices are devices every container may use, allowed by
+// the container runtime rather than the app's spec (runc's default devices):
+// passing a USB device in rebuilds the native container's device cgroup, which
+// must keep allowing them. /dev/tty is left out: over SSH without a terminal
+// it fails for want of a controlling terminal, not for want of permission.
+var containerDefaultDevices = []string{"/dev/null", "/dev/zero", "/dev/full",
+	"/dev/urandom", "/dev/ptmx"}
+
+// unusableDefaultDevices returns those of containerDefaultDevices the app
+// cannot open, empty when it can open them all.
+func (a *containerUSBApp) unusableDefaultDevices() ([]string, error) {
+	out, err := a.run(withArgs(`for d in "$@"; do ( : <> "$d" ) 2>/dev/null || echo "fail=$d"; done`,
+		containerDefaultDevices...))
+	if err != nil {
+		return nil, err
+	}
+	var failed []string
+	for _, line := range strings.Split(out, "\n") {
+		if dev, ok := strings.CutPrefix(strings.TrimSpace(line), "fail="); ok {
+			failed = append(failed, dev)
+		}
+	}
+	return failed, nil
+}
+
+// bootMarkerPath is a file in the app's /dev/shm, a tmpfs of its own whether
+// it runs natively or in a shim VM, so it is gone once the app restarts.
+const bootMarkerPath = "/dev/shm/evtest-boot-marker"
+
+// writeBootMarker leaves a random marker in the app and returns it.
+func (a *containerUSBApp) writeBootMarker() (string, error) {
+	id, err := uuid.NewV4()
+	if err != nil {
+		return "", err
+	}
+	marker := id.String()
+	_, err = a.run(fmt.Sprintf("echo %s > %s", marker, bootMarkerPath))
+	return marker, err
+}
+
+// bootMarker reads the marker back; it differs once the app has restarted.
+func (a *containerUSBApp) bootMarker() (string, error) {
+	out, err := a.run("cat " + bootMarkerPath + " 2>/dev/null")
+	return strings.TrimSpace(out), err
+}
+
+// hostCharDeviceMode returns the permission bits of a node in EVE's own /dev,
+// e.g. "660", or "" when there is no such node.
+func hostCharDeviceMode(device *evetest.EdgeDevice, node string) (string, error) {
+	out, _, err := device.RunShellScript(
+		fmt.Sprintf("stat -c %%a %s 2>/dev/null", node), appScriptTimeout, 0)
+	return strings.TrimSpace(out), err
+}
+
+// withArgs prefixes a script with "set --" so that it sees args as $1, $2...
+func withArgs(script string, args ...string) string {
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+	}
+	return "set -- " + strings.Join(quoted, " ") + "\n" + script
+}
+
+// parseKeyValues parses key=value lines; other lines are ignored.
+func parseKeyValues(out string) map[string]string {
+	kv := make(map[string]string)
+	for _, line := range strings.Split(out, "\n") {
+		if key, value, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
+			kv[key] = value
+		}
+	}
+	return kv
 }

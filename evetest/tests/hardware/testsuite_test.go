@@ -8,8 +8,9 @@
 //
 // File layout: testsuite_test.go registers the suite, helpers_test.go holds
 // the device setup, its configuration, the application factory and the
-// predicates shared by the tests, and usb_hotplug_test.go the USB hot-plug
-// tests themselves.
+// predicates and in-app device probes shared by the tests,
+// usb_hotplug_test.go the USB hot-plug tests into VMs, and
+// usb_container_hotplug_test.go the one into container apps.
 package hardware_test
 
 import (
@@ -32,6 +33,12 @@ import (
 //     at its full port path; among five applications claiming it by every
 //     prefix of that path and by the path itself, the most specific claim
 //     gets the drive and the next one inherits it when that application goes.
+//   - TestUSBHotplugIntoContainer -- a USB serial adapter, and for a native
+//     container a flash drive, plugged into the running device reach a
+//     container app as device nodes it can use, leave it on unplug and come
+//     back when re-plugged into another port, without the app restarting; a
+//     native container cannot use a device it was not given. Runs once with
+//     the app as a native container and once in a shim VM.
 func TestHardwareSuite(test *testing.T) {
 	evetest.Init(test)
 	defer evetest.Close()
@@ -46,6 +53,23 @@ func TestHardwareSuite(test *testing.T) {
 		},
 		evetest.TestCase{
 			Test: TestUSBHubChain,
+		},
+		evetest.TestCase{
+			Test: TestUSBHotplugIntoContainer,
+			Variants: []evetest.TestVariant{
+				{
+					Name: "NativeContainer",
+					Parameters: []evetest.TestParameterValue{
+						{Key: containerModeParamKey, Value: containerModeNative},
+					},
+				},
+				{
+					Name: "ShimVMContainer",
+					Parameters: []evetest.TestParameterValue{
+						{Key: containerModeParamKey, Value: containerModeShim},
+					},
+				},
+			},
 		},
 	)
 }

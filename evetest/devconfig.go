@@ -549,8 +549,11 @@ type PhysicalIOConfig struct {
 	ParentAssignmentGroup string
 	Usage                 evecommon.PhyIoMemberUsage
 	// Physical addresses; every non-empty field is written into Phyaddrs.
-	PCIAddress    string
-	USBAddress    string
+	PCIAddress string
+	USBAddress string
+	// USBProduct claims a USB device by its ids, "vvvv:pppp" in hex, on
+	// whatever port it is plugged into.
+	USBProduct    string
 	InterfaceName string
 	Serial        string
 	// VFCount is the number of SR-IOV virtual functions EVE creates on a
@@ -567,6 +570,9 @@ func (config PhysicalIOConfig) toPhysicalIOProto() *eveconfig.PhysicalIO {
 	}
 	if config.USBAddress != "" {
 		physAddrs["usbaddr"] = config.USBAddress
+	}
+	if config.USBProduct != "" {
+		physAddrs["usbproduct"] = config.USBProduct
 	}
 	if config.InterfaceName != "" {
 		physAddrs["ifname"] = config.InterfaceName
