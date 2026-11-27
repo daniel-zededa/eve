@@ -806,6 +806,30 @@ func (ErrIoBundlePcibackOp) Error() string { return "pciback operation failed" }
 
 // ErrIoBundleMissingDevice means the device backing an IoBundle was not found.
 // Typed so callers can clear it (RemoveByType) once resolvable, keeping warnings.
+// USBPassthroughStatus is published by usbmanager for a domain whose USB
+// devices it could not fully pass through, e.g. a native container whose
+// device nodes or device cgroup could not be set up. domainmgr reports it as
+// a warning (ErrUSBPassthrough) on the USB device adapters the domain uses.
+type USBPassthroughStatus struct {
+	DomainName string
+	Error      string
+}
+
+// Key returns the domain name.
+func (status USBPassthroughStatus) Key() string {
+	return status.DomainName
+}
+
+// ErrUSBPassthrough is a problem passing a USB device adapter through to the
+// domain using it; see USBPassthroughStatus.
+type ErrUSBPassthrough struct {
+	msg string
+}
+
+func (e ErrUSBPassthrough) Error() string {
+	return e.msg
+}
+
 type ErrIoBundleMissingDevice struct {
 	msg string
 }

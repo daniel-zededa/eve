@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"slices"
@@ -165,6 +166,9 @@ type domainContext struct {
 	// DomainConfigs received so far, which cover only the apps whose volumes
 	// already resolved.
 	subCPUDemandSet pubsub.Subscription
+	// subUSBPassthroughStatus is what usbmanager could not pass through to
+	// a domain, reported as a warning on its USB device adapters
+	subUSBPassthroughStatus pubsub.Subscription
 	// pubCPUPoolStatus carries the node CPU pool report to zedagent, which
 	// projects it onto ZInfoDevice.cpu_pools. domainmgr owns the allocator, so
 	// it is the only agent that can compute it.
@@ -519,6 +523,23 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	}
 	domainCtx.subCPUDemandSet = subCPUDemandSet
 
+	subUSBPassthroughStatus, err := ps.NewSubscription(pubsub.SubscriptionOptions{
+		AgentName:     "usbmanager",
+		MyAgentName:   agentName,
+		TopicImpl:     types.USBPassthroughStatus{},
+		Activate:      true,
+		Ctx:           &domainCtx,
+		CreateHandler: handleUSBPassthroughStatusCreate,
+		ModifyHandler: handleUSBPassthroughStatusModify,
+		DeleteHandler: handleUSBPassthroughStatusDelete,
+		WarningTime:   warningTime,
+		ErrorTime:     errorTime,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	domainCtx.subUSBPassthroughStatus = subUSBPassthroughStatus
+
 	// Subscribe to DomainConfig from zedmanager. Created here, with the demand
 	// set, because CPU placement plans over both from the first demand set on;
 	// activated once domainmgr is ready to run domains.
@@ -661,6 +682,9 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 
 		case change := <-subCPUDemandSet.MsgChan():
 			subCPUDemandSet.ProcessChange(change)
+
+		case change := <-subUSBPassthroughStatus.MsgChan():
+			subUSBPassthroughStatus.ProcessChange(change)
 
 		case <-domainCtx.publishTicker.C:
 			publishProcessesHandler(&domainCtx)
@@ -871,6 +895,9 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 		case change := <-subCPUDemandSet.MsgChan():
 			subCPUDemandSet.ProcessChange(change)
 
+		case change := <-subUSBPassthroughStatus.MsgChan():
+			subUSBPassthroughStatus.ProcessChange(change)
+
 		case change := <-subDeviceNetworkStatus.MsgChan():
 			subDeviceNetworkStatus.ProcessChange(change)
 
@@ -976,6 +1003,59 @@ func handleRestart(ctxArg interface{}, restartCounter int) {
 
 // The demand set is a placement input: a change re-plans and wakes every
 // workload to bring itself in line.
+func handleUSBPassthroughStatusCreate(ctxArg interface{}, key string, statusArg interface{}) {
+	status := statusArg.(types.USBPassthroughStatus)
+	setUSBPassthroughErrors(ctxArg.(*domainContext), status.DomainName, status.Error)
+}
+
+func handleUSBPassthroughStatusModify(ctxArg interface{}, key string, statusArg interface{},
+	_ interface{}) {
+	status := statusArg.(types.USBPassthroughStatus)
+	setUSBPassthroughErrors(ctxArg.(*domainContext), status.DomainName, status.Error)
+}
+
+func handleUSBPassthroughStatusDelete(ctxArg interface{}, key string, _ interface{}) {
+	setUSBPassthroughErrors(ctxArg.(*domainContext), key, "")
+}
+
+// setUSBPassthroughErrors reports what usbmanager could not pass through to
+// a domain as a warning on the USB device adapters it uses, and clears it
+// when errStr is "". The domain is named in the message, so that the
+// warning can be found and cleared again even after the adapter was given to
+// another app.
+func setUSBPassthroughErrors(ctx *domainContext, domainName, errStr string) {
+	appUUID, _, _, err := types.DomainnameToUUID(domainName)
+	if err != nil {
+		log.Errorf("USBPassthroughStatus: %v", err)
+		return
+	}
+	prefix := fmt.Sprintf("USB passthrough to %s: ", domainName)
+	changed := false
+	for i := range ctx.assignableAdapters.IoBundleList {
+		ib := &ctx.assignableAdapters.IoBundleList[i]
+		if ib.Type != types.IoUSBDevice && ib.Type != types.IoUSB {
+			continue
+		}
+		// this source's entries on the adapter, other domains' kept
+		var desired []string
+		for _, e := range ib.Error.Errors {
+			if e.TypeStr == reflect.TypeOf(types.ErrUSBPassthrough{}).String() &&
+				!strings.HasPrefix(e.ErrStr, prefix) {
+				desired = append(desired, e.ErrStr)
+			}
+		}
+		if errStr != "" && ib.UsedByUUID == appUUID {
+			desired = append(desired, prefix+errStr)
+		}
+		if ib.Error.SetSourceErrors(types.ErrUSBPassthrough{}, true, false, desired) {
+			changed = true
+		}
+	}
+	if changed {
+		ctx.publishAssignableAdapters()
+	}
+}
+
 func handleCPUDemandSetCreate(ctxArg interface{}, key string, _ interface{}) {
 	handleCPUDemandSetImpl(ctxArg)
 }

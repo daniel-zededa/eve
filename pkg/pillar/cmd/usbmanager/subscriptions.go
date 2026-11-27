@@ -5,6 +5,7 @@ package usbmanager
 import (
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/lf-edge/eve/pkg/pillar/hypervisor"
@@ -66,6 +67,30 @@ func (usbCtx *usbmanagerContext) subscribe(ps *pubsub.PubSub) {
 	}
 	usbCtx.subscriptions = append(usbCtx.subscriptions, subDomainStatus)
 
+	pubPassthroughStatus, err := ps.NewPublication(pubsub.PublicationOptions{
+		AgentName: agentName,
+		TopicType: types.USBPassthroughStatus{},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	var pubMutex sync.Mutex
+	usbCtx.controller.publishPassthroughError = func(containerName, errStr string) {
+		pubMutex.Lock()
+		defer pubMutex.Unlock()
+		var err error
+		if errStr == "" {
+			if _, perr := pubPassthroughStatus.Get(containerName); perr == nil {
+				err = pubPassthroughStatus.Unpublish(containerName)
+			}
+		} else {
+			err = pubPassthroughStatus.Publish(containerName,
+				types.USBPassthroughStatus{DomainName: containerName, Error: errStr})
+		}
+		if err != nil {
+			log.Errorf("USBPassthroughStatus of %s: %v", containerName, err)
+		}
+	}
 	usbCtx.controller.startContainerReconciler(make(chan struct{}))
 
 	for _, sub := range usbCtx.subscriptions {
